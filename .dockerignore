@@ -1,0 +1,12 @@
+.git/
+.venv/
+build/
+dist/
+tests/
+__pycache__/
+*.pyc
+*.mdb
+*.lef
+*.lxf
+*.xlsx
+!webapp/templates_mdb/empty_splash_meet.mdb

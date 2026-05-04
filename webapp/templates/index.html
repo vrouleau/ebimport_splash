@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ebimport_splash — Import de compétition</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main>
+    <h1>ebimport_splash</h1>
+    <p class="lede">
+      Conversion d'un fichier Excel d'inscriptions en base SPLASH Meet Manager
+      (fichier <code>.mdb</code>) ou en fichier d'échange Lenex
+      (<code>.lxf</code>).
+    </p>
+
+    <form id="run-form">
+      <fieldset>
+        <legend>Fichier source</legend>
+        <label>
+          Fichier Excel (onglet <em>Attendees</em>) :
+          <input type="file" name="xlsx" accept=".xlsx" required>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Mode d'exécution</legend>
+        <label>
+          <input type="radio" name="mode" value="dry-run" checked>
+          <strong>Validation seulement</strong>
+          — analyse le fichier Excel sans rien écrire ; renvoie la liste
+          des problèmes détectés.
+        </label>
+        <label>
+          <input type="radio" name="mode" value="mdb">
+          <strong>Générer un <code>.mdb</code></strong>
+          — produit une base SPLASH Meet Manager 11 prête à ouvrir.
+        </label>
+        <label>
+          <input type="radio" name="mode" value="lenex">
+          <strong>Générer un <code>.lxf</code></strong>
+          — produit un fichier Lenex 3.0 zippé.
+        </label>
+      </fieldset>
+
+      <fieldset id="mdb-opts">
+        <legend>Options pour le <code>.mdb</code></legend>
+        <label>
+          Base <code>.mdb</code> existante (optionnel) :
+          <input type="file" name="mdb" accept=".mdb">
+        </label>
+        <p class="hint">
+          Si laissé vide, un modèle SPLASH vierge est utilisé.
+          Si fourni, le loader ajoute les nouvelles données sans écraser
+          les structures déjà en place (clubs, athlètes, épreuves, horaire).
+        </p>
+      </fieldset>
+
+      <div class="actions">
+        <button type="submit" id="go">Exécuter</button>
+        <span id="status" class="status"></span>
+      </div>
+    </form>
+
+    <section id="results" hidden>
+      <h2>Résultats</h2>
+
+      <section id="summary-block" hidden>
+        <h3>Sommaire</h3>
+        <ul id="summary-list"></ul>
+      </section>
+
+      <section id="issues-block" hidden>
+        <h3>Problèmes détectés</h3>
+        <div id="issues-list"></div>
+      </section>
+
+      <section id="download-block" hidden>
+        <h3>Téléchargement</h3>
+        <p>
+          <a id="download-link" href="#" class="download-btn">
+            Télécharger le zip
+          </a>
+        </p>
+        <p class="hint">
+          Le fichier contient le résultat (<code>.mdb</code> ou
+          <code>.lxf</code>) et un rapport texte des problèmes détectés.
+          Le téléchargement nettoie le fichier côté serveur.
+        </p>
+      </section>
+
+      <details id="raw-block" hidden>
+        <summary>Voir la sortie brute du loader</summary>
+        <pre id="raw-output"></pre>
+      </details>
+    </section>
+
+    <footer>
+      <small>
+        Source : <a href="https://github.com/vrouleau/ebimport_splash"
+                    target="_blank" rel="noopener">
+          github.com/vrouleau/ebimport_splash</a>
+      </small>
+    </footer>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

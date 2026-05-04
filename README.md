@@ -192,3 +192,44 @@ xlsx row number.
 
 Private; no public licence specified yet. Do not distribute the
 generated `.mdb` files (they may contain personal data).
+
+---
+
+## Web UI (Docker)
+
+A minimal Flask web app in `webapp/` wraps both loaders behind a
+single-page French UI.  Upload an xlsx, pick a mode (dry-run / MDB /
+Lenex), see summary + issues in the page, download a zip with the
+generated file + issues report.
+
+### Build + run locally
+
+```bash
+docker build -t ebimport-splash:latest .
+docker run --rm -p 5000:5000 ebimport-splash:latest
+# Browse http://localhost:5000
+```
+
+### Deployment via Portainer
+
+On the target host (e.g. `192.168.1.190`), in Portainer (`:9000`):
+
+1. **Stacks → Add stack**
+2. Name: `ebimport-splash`
+3. **Web editor** (or **Repository** pointing at this repo), paste the
+   content of `docker-compose.yml`.
+4. **Deploy the stack**.
+
+The container exposes port `5000` on the host.  Browse to
+`http://192.168.1.190:5000` on the LAN.
+
+No persistent volumes are needed — uploads live in `/tmp/ebimport_staging/`
+inside the container and are cleaned up on download or after a 30-min
+TTL.
+
+### Security note
+
+The app has **no authentication** and is designed for use on a trusted
+LAN. Do not expose it on the public internet without a reverse proxy
+with a password (e.g. nginx/Traefik with basic auth).  Uploaded xlsx
+files contain PII (athlete names, birthdates, emails).

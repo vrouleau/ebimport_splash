@@ -1,0 +1,16 @@
+services:
+  ebimport-splash:
+    image: ebimport-splash:latest
+    container_name: ebimport-splash
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5000/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
