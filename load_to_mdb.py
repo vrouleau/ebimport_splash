@@ -793,7 +793,14 @@ class MDB:
         jars = (
             glob.glob(os.path.join(UCANACCESS_DIR, "ucanaccess-*.jar"))
             + glob.glob(os.path.join(UCANACCESS_DIR, "lib", "*.jar"))
+            # Support the flattened layout used by the self-contained
+            # distribution tarball, where all five jars live directly
+            # under vendor/ucanaccess/ with no lib/ subdir.
+            + glob.glob(os.path.join(UCANACCESS_DIR, "*.jar"))
         )
+        # Dedup while preserving order
+        seen = set()
+        jars = [j for j in jars if not (j in seen or seen.add(j))]
         if not jars:
             raise SystemExit(
                 f"UCanAccess jars not found under {UCANACCESS_DIR}. "

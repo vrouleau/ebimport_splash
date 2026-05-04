@@ -31,3 +31,8 @@ ucanaccess/
 ucanaccess-*/
 UCanAccess-*/
 *.jar
+
+# ---- Build output ----
+build/
+dist/
+
