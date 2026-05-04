@@ -23,8 +23,10 @@ Thumbs.db
 *.lxf
 *.xlsx
 
-# but DO commit the synthetic test fixture
+# but DO commit the synthetic test fixture + the empty MDB baked into
+# the Docker image
 !tests/test_attendees.xlsx
+!webapp/templates_mdb/empty_splash_meet.mdb
 
 # ---- UCanAccess runtime (downloaded locally; do not check in) ----
 ucanaccess/
