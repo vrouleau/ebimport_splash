@@ -576,10 +576,16 @@ def build_lenex(inscriptions: list[Inscription]) -> ET.ElementTree:
         else:
             relay_groups[(cnorm, ins.event)].append((akey, ins.best_cs))
 
-    # Assign event numbers deterministically
+    # Assign event numbers deterministically.
+    # Sort: by catalog UID (all events of the same style together), then by
+    # age bracket (15-18 < Masters < Open), then by gender with F before M.
+    _AGE_ORDER = {"1518": 0, "MASTERS": 1, "OPEN": 2}
+    _GENDER_ORDER = {"F": 0, "M": 1, "X": 2}   # Lenex gender strings
     sorted_events = sorted(
         events.keys(),
-        key=lambda e: (e.age_code, e.uniqueid, e.gender))
+        key=lambda e: (e.uniqueid,
+                       _AGE_ORDER.get(e.age_code, 99),
+                       _GENDER_ORDER.get(e.gender, 99)))
     for i, ev in enumerate(sorted_events, start=1):
         events[ev] = i
 

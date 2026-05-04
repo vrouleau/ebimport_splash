@@ -1294,9 +1294,20 @@ def main():
     rows = db.query("SELECT COALESCE(MAX(EVENTNUMBER),0) FROM SWIMEVENT")
     next_event_no = int(rows[0][0]) if rows and rows[0][0] is not None else 0
 
+    # Sort key for the event list:
+    #   1) by catalog UID           — all "Nage avec obstacles" together, etc.
+    #   2) by age bracket           — 15-18, then MASTERS, then OPEN
+    #   3) by gender, F before M    — (gender 2 before gender 1; 0=Mixed last)
+    # The age bracket order happens to fall out of alphabetical string order
+    # on the age_code values "1518" < "MASTERS" < "OPEN".
+    _AGE_ORDER = {"1518": 0, "MASTERS": 1, "OPEN": 2}
+    _GENDER_ORDER = {GENDER_FEMALE: 0, GENDER_MALE: 1, GENDER_ALL: 2}
+
     for ek, ev in sorted(
             events.items(),
-            key=lambda kv: (kv[1].age_code, kv[1].uniqueid, kv[1].gender)):
+            key=lambda kv: (kv[1].uniqueid,
+                            _AGE_ORDER.get(kv[1].age_code, 99),
+                            _GENDER_ORDER.get(kv[1].gender, 99))):
         style_id = style_ids[ev.uniqueid]
         age_min, age_max, _age_name = AGE_GROUPS[ev.age_code]
         xmin, xmax = age_min, age_max
