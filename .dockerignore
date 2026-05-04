@@ -9,4 +9,3 @@ __pycache__/
 *.lef
 *.lxf
 *.xlsx
-!webapp/templates_mdb/empty_splash_meet.mdb

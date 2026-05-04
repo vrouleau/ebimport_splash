@@ -1,33 +1,35 @@
 #!/usr/bin/env python3
 """
 load_to_mdb.py
-Populate a SPLASH Meet Manager 11 .mdb file with clubs, athletes and
-individual / relay session inscriptions read from the "Attendees" sheet
-of a registration workbook (e.g. CPLC2026FINAL.xlsx).
 
-The target .mdb is an empty meet shell created by SPLASH Meet Manager 11.
-All primary keys come from BSUIDTABLE.BS_GLOBAL_UID (monotonic counter
-shared by every table). We insert:
+Import inscriptions from a registration workbook (xlsx "Attendees"
+sheet) into an existing SPLASH Meet Manager 11 meet database.
 
-    - custom SWIMSTYLE rows for the lifesaving strokes
-      (Obstacle, Corde, Portage, Remorquage, Sauveteur d'acier,
-       Medley + the three mixed relays)
-    - one placeholder SWIMSESSION (user re-organises afterwards in MM)
-    - one SWIMEVENT per distinct (age-group, gender, stroke, distance)
-    - one AGEGROUP row per SWIMEVENT
-    - one CLUB row per distinct club
-    - one ATHLETE row per distinct (first name, last name, NRAN)
-    - one SWIMRESULT row per individual inscription (RESULTSTATUS=0)
-    - one RELAY row per (club, age group, relay style) with the
-      athletes of that club as RELAYPOSITION rows
+The supplied .mdb is the **authoritative event template**: the script
+never creates SWIMSTYLE / SWIMEVENT / AGEGROUP / SWIMSESSION or
+COMBINEDEVENTS rows.  It only inserts CLUB / ATHLETE / SWIMRESULT /
+RELAY / RELAYPOSITION.  The meet organiser sets up the event
+structure (events, age groups, sessions, cumulatifs) in SPLASH; we
+just populate entries.
 
-Run from Linux/WSL with Java 8+ available and UCanAccess unpacked in
-/tmp/ucanaccess (or change UCANACCESS_DIR below).  On Windows you can
-point pyodbc at the MS Access driver instead – see README.
+First run vs re-run is auto-detected from whether any SWIMRESULT
+rows already exist in the supplied .mdb.  A re-run is additive:
+only missing rows are inserted; entry times are updated only when
+a faster time is supplied.
+
+Every xlsx ticket must resolve to an existing SWIMEVENT + AGEGROUP
+in the template.  Any mismatch is reported as a FATAL error and no
+writes are performed.
+
+Age-bracket routing:
+  - "15-18" ticket    → AGEGROUP [15, 18]
+  - "Open" ticket     → AGEGROUP [19, 99]
+  - "MA" individual   → 5-year Masters bracket containing athlete age
+  - "MA Relais Mixte" → age-sum bracket containing the squad's total age
 
 Usage:
-    python3 load_to_mdb.py --xlsx CPLC2026FINAL.xlsx --mdb Canadien.mdb
-                           [--dry-run] [--wipe]
+    python3 load_to_mdb.py --xlsx inscriptions.xlsx --mdb template.mdb
+                           [--dry-run]
 """
 from __future__ import annotations
 
@@ -54,135 +56,98 @@ UCANACCESS_DIR = os.environ.get(
 )
 
 MEET_NATION = "CAN"
-PLACEHOLDER_SESSION_NAME = "Placeholder – reorganise in Meet Manager"
-# Session date must exist; user will edit it inside MM.
-PLACEHOLDER_SESSION_DATE = dt.datetime(2026, 6, 20, 9, 0, 0)
-# Age reference date (FINA "age at end of meet year" — matches sample Lenex).
-# Used when choosing an AGEGROUP for an entry if MM-side age-splits exist.
-AGE_DATE = dt.date(2026, 6, 20)
-POOLTYPE_LCM = 1  # 1=LCM, 0=SCM, 2=SCY — matches the sample .lef "LCM"
-COURSE_LCM = 1
+# Age reference date used when routing Masters entries to 5-year brackets
+# and when computing the sum-of-ages for Masters relays.  The
+# Championnats canadiens de sauvetage 2026 takes place 29-31 May 2026 —
+# athletes' ages are computed at AGE_DATE.
+AGE_DATE = dt.date(2026, 5, 31)
 
 # SPLASH/Lenex gender encoding in SMALLINT columns.
-# 0 = All / Mixed, 1 = Male, 2 = Female.
-# Note: the federation reference DB uses 0 (All) even for mixed-gender relays,
-# never 3 (which some Lenex tools emit for "Mixed").  Sticking to 0/1/2
-# avoids any chance of hitting a Delphi case-else that isn't handled.
 GENDER_MALE   = 1
 GENDER_FEMALE = 2
 GENDER_ALL    = 0
-GENDER_MIXED  = 0        # alias — treat mixed relays as "All" per SS convention
+GENDER_MIXED  = 3     # template uses 3 for mixed relays (check on load)
+
+# SPLASH ROUND values found in the template.  2 = Prelim, 9 = Final,
+# 1 = Timed Final (no advancement).
+ROUND_TIMED_FINAL = 1
+ROUND_PRELIM      = 2
+ROUND_FINAL       = 9
 
 # ----------------------------------------------------------------------------
-# Société de Sauvetage lifesaving catalog (extracted from a real SPLASH DB
-# produced by the federation — "30-Deux 25 octobre 2025.mdb").  SPLASH stores
-# lifesaving events with STROKE=0 / TECHNIQUE=0 and keeps the identity in the
-# CODE, NAME and UNIQUEID columns.  STROKE=0 tells TBSwLanguage.StrokeName to
-# render the CODE/NAME instead of looking up one of the swim strokes (1..5).
-#
-# UNIQUEIDs 501-540 come straight from the federation catalog.  550-552 are
-# reserved here for events in the Canadien meet that don't exist in the
-# original catalog (Medley 200 m, Portage relay 4x50 m, Obstacle 100 m for
-# Masters).  Bilingual French / English names are emitted in both
-# SWIMSTYLE.NAME (primary, French) and the Lenex NAME attribute.
+# Ticket-type parsing
 # ----------------------------------------------------------------------------
-LIFESAVING_STROKE    = 0        # STROKE value used by SPLASH for catalog items
-LIFESAVING_TECHNIQUE = 0
-
-# Ticket-type parsing helpers
 NON_RACE_PREFIXES = (
     "Banquet", "Coach", "Cosmod", "Couloir", "Officiel", "Priorit",
     "Sheraton",
 )
 
-# label -> catalog entry.  All distances agreed with the meet organiser.
-#   key    : (ticket_label, is_relay)
-#   value  : (UNIQUEID, CODE, distance_m, relay_count, name_fr, name_en)
-LIFESAVING_CATALOG: dict[tuple, tuple] = {
-    # individuals (Corde stays individual for now; pairing will be handled in MM)
-    ("Corde",             False): (504, "ID504",  12, 1,
-                                   "12 m Lancer de la corde",
-                                   "12 m Line Throw"),
-    ("Obstacle",          False): (501, "ID501", 200, 1,
-                                   "200 m Nage avec obstacles",
-                                   "200 m Obstacle Swim"),
-    ("Obstacle100",       False): (552, "ID552", 100, 1,
-                                   "100 m Nage avec obstacles",
-                                   "100 m Obstacle Swim"),
-    ("Portage",           False): (502, "ID502", 100, 1,
-                                   "100 m Portage du mannequin plein avec palmes",
-                                   "100 m Manikin Carry w/ Fins"),
-    ("Portage50",         False): (507, "ID507",  50, 1,
-                                   "50 m Portage du mannequin plein",
-                                   "50 m Manikin Carry"),
-    ("Remorquage",        False): (506, "ID506", 100, 1,
-                                   "100 m Remorquage du mannequin ½ plein + palmes",
-                                   "100 m Manikin Tow with Fins"),
-    ("Sauveteur d'acier", False): (508, "ID508", 200, 1,
-                                   "200 m Sauveteur d'acier",
-                                   "200 m Super Lifesaver"),
-    ("Medley",            False): (550, "ID550", 200, 1,
-                                   "200 m Medley de sauvetage",
-                                   "200 m Rescue Medley"),
-
-    # relays — all 4x50 m per the organiser's spec
-    ("Medley",            True):  (538, "ID538",  50, 4,
-                                   "4 x 50 m Relais Medley",
-                                   "4 x 50 m Rescue Medley Relay"),
-    ("Obstacle",          True):  (540, "ID540",  50, 4,
-                                   "4 x 50 m Relais obstacles",
-                                   "4 x 50 m Obstacle Relay"),
-    ("Portage",           True):  (551, "ID551",  50, 4,
-                                   "4 x 50 m Relais portage du mannequin",
-                                   "4 x 50 m Manikin Carry Relay"),
-}
-
-AGE_GROUPS = {  # code -> (AGEMIN, AGEMAX, display name FR/EN)
-    "1518":    (15, 18, "15-18 ans"),
-    "MASTERS": (30, 99, "Maîtres"),
-    "OPEN":    ( 0, 99, "Toutes catégories"),
-}
-
-# Combined events ("Cumulatifs") — one per (age_code × gender).
-# Each cumulatif sums points from a list of catalog UIDs.  Point schedule
-# comes from the 30-Deux federation sample: 1st=20, 2nd=18, ..., 16th=1,
-# 17th+=0.  Corde (UID 504) and Medley (UID 550) are intentionally excluded
-# per federation convention; relays aren't counted either.
+# Each xlsx ticket label maps to a catalog UNIQUEID (which must exist in
+# the template .mdb) and a flag saying whether it's an individual or
+# relay entry.  UIDs below match the Championnats canadiens 2026 template
+# ("Championnats canadiens Québec 29-31 mai 2026.mdb"):
 #
-#   (age_code, gender) -> (display_name, [UIDs])
-CUMULATIF_POINTS = "20,18,16,14,13,12,11,10,8,7,6,5,4,3,2,1"
-CUMULATIFS: dict[tuple, tuple[str, list[int]]] = {
-    ("1518",    GENDER_FEMALE): ("Cumulatif 15-18 ans - dames",
-                                 [501, 502, 506, 507, 508]),
-    ("1518",    GENDER_MALE):   ("Cumulatif 15-18 ans - hommes",
-                                 [501, 502, 506, 507, 508]),
-    ("OPEN",    GENDER_FEMALE): ("Cumulatif Open - dames",
-                                 [501, 502, 506, 507, 508]),
-    ("OPEN",    GENDER_MALE):   ("Cumulatif Open - hommes",
-                                 [501, 502, 506, 507, 508]),
-    # Masters uses the 100 m Obstacle variant (UID 552) instead of 200 m (501).
-    ("MASTERS", GENDER_FEMALE): ("Cumulatif Maîtres - dames",
-                                 [552, 502, 506, 507, 508]),
-    ("MASTERS", GENDER_MALE):   ("Cumulatif Maîtres - hommes",
-                                 [552, 502, 506, 507, 508]),
+#   UID 501  200 m Nage avec obstacles / Obstacle Swim         (15-18, Open)
+#   UID 541  100 m Nage avec obstacles / Obstacle Swim         (Masters)
+#   UID 502  100 m Portage Mannequin palmes / Manikin Carry Fins
+#   UID 507  50 m Portage du mannequin plein / Manikin Carry
+#   UID 506  100 m Remorquage mannequin palmes / Manikin Tow Fins
+#   UID 508  200 m Sauveteur d'acier / Super Lifesaver
+#   UID 531  100 m Sauvetage combiné / Rescue Medley
+#   UID 504  12 m Lancer de la corde / Line Throw
+#   UID 542  4 x 50 m Relais obstacle mixte / Mixed Obstacle Relay
+#   UID 543  2 x 50 m  Relais mixte portage / Mixed Carry Relay
+#   UID 544  4 x 50 m Relais mixte sauve combiné / Mixed Medley Relay
+#
+# Masters-only Obstacle maps to UID 541 (100 m); everyone else maps to UID 501
+# (200 m).  The parser returns UID 541 when the ticket is "MA <F/M> Obstacle
+# 100 m" and UID 501 otherwise.
+#
+# key    : (ticket_label, is_relay, is_masters_obstacle)
+# value  : UNIQUEID
+TICKET_UID: dict[tuple, int] = {
+    ("Corde",             False, False): 504,
+    ("Obstacle",          False, False): 501,    # 15-18 / Open
+    ("Obstacle",          False, True):  541,    # Masters 100 m
+    ("Portage",           False, False): 502,    # 100 m
+    ("Portage50",         False, False): 507,    # 50 m
+    ("Remorquage",        False, False): 506,
+    ("Sauveteur d'acier", False, False): 508,
+    ("Medley",            False, False): 531,    # Sauvetage combiné 100 m
+
+    ("Medley",            True,  False): 544,    # 4 x 50 m Mixed Medley Relay
+    ("Obstacle",          True,  False): 542,    # 4 x 50 m Mixed Obstacle Relay
+    ("Portage",           True,  False): 543,    # 2 x 50 m Mixed Carry Relay
+}
+
+# Age bracket codes and the nominal (AGEMIN, AGEMAX) we're looking for in
+# the template for each.  "MASTERS" doesn't map to a single pair — the
+# loader picks the 5-year bracket containing the athlete's age at AGE_DATE.
+AGE_GROUPS = {  # code -> (AGEMIN, AGEMAX, display name)
+    "1518":    (15, 18, "15-18 ans"),
+    "OPEN":    (19, 99, "Open (19 & over)"),
+    "MASTERS": (None, None, "Maîtres (5-year brackets)"),
 }
 
 
 @dataclass
 class EventKey:
+    """Uniquely identifies a ticket class.  All attributes come from
+    the xlsx; the matching SWIMEVENT / AGEGROUP in the template .mdb
+    is resolved at validate/insert time."""
     age_code: str          # '1518' | 'MASTERS' | 'OPEN'
     gender: int            # GENDER_MALE | GENDER_FEMALE | GENDER_MIXED
-    uniqueid: int          # Société de Sauvetage catalog UID
-    code: str              # 'ID501' etc.
-    distance: int
-    relay_count: int       # 1 for individual, 4 for relay
-    name_fr: str
-    name_en: str
+    uniqueid: int          # template SWIMSTYLE.UNIQUEID
+    is_relay: bool
 
     def key(self) -> tuple:
-        # Identity of an event = (age bracket, gender, catalog UID).
-        # The catalog UID already encodes distance + relay count.
-        return (self.age_code, self.gender, self.uniqueid)
+        return (self.age_code, self.gender, self.uniqueid, self.is_relay)
+
+    @property
+    def label(self) -> str:
+        g = {1: "M", 2: "F", 3: "X"}.get(self.gender, "?")
+        kind = "relay" if self.is_relay else "ind"
+        return f"{self.age_code}/{g}/UID{self.uniqueid}/{kind}"
 
 
 def parse_ticket(ticket: str) -> EventKey | None:
@@ -201,11 +166,10 @@ def parse_ticket(ticket: str) -> EventKey | None:
     mr = re.match(r"^Relais Mixte\s+(\S+)", rest)
     if mr:
         style = mr.group(1).strip()   # 'Medley' | 'Obstacle' | 'Portage'
-        cat = LIFESAVING_CATALOG.get((style, True))
-        if cat is None:
+        uid = TICKET_UID.get((style, True, False))
+        if uid is None:
             return None
-        uid, code, dist, rc, fr, en = cat
-        return EventKey(age_code, GENDER_MIXED, uid, code, dist, rc, fr, en)
+        return EventKey(age_code, GENDER_MIXED, uid, is_relay=True)
 
     # Individual: "<F|M> <label> [<n> m]"
     mi = re.match(r"^([FM])\s+(.*)$", rest)
@@ -217,18 +181,35 @@ def parse_ticket(ticket: str) -> EventKey | None:
     label = mb.group(1).strip()
     dist_txt = mb.group(2)
 
-    # Disambiguate Portage 50 / 100 and Obstacle 100 (Masters) / 200
     lookup_label = label
+    is_masters_obstacle = False
+    # Portage has two variants: 50 m and 100 m.
     if label == "Portage" and dist_txt == "50":
         lookup_label = "Portage50"
+    # Obstacle 100 m is only valid for Masters (Masters uses UID 541).
     elif label == "Obstacle" and dist_txt == "100":
-        lookup_label = "Obstacle100"
+        if age_code != "MASTERS":
+            # Someone tagged a 15-18 or Open entry with an Obstacle 100m
+            # ticket; ignore the distance, map to UID 501 (200 m) but we
+            # still report it as a bad combination via validation.
+            pass
+        else:
+            is_masters_obstacle = True
 
-    cat = LIFESAVING_CATALOG.get((lookup_label, False))
-    if cat is None:
+    # Masters Obstacle defaults to 100 m even without an explicit "100 m"
+    # suffix, since the template only has UID 541 for Masters.  But be
+    # strict: only honour the 100 m variant when both age=MASTERS AND the
+    # ticket says "100".  A plain "MA F Obstacle" without distance will
+    # still resolve to UID 501 (which the template doesn't have Masters
+    # brackets for) and therefore fail validation — the organiser can
+    # fix the xlsx.
+    if label == "Obstacle" and age_code == "MASTERS" and is_masters_obstacle:
+        uid = TICKET_UID.get(("Obstacle", False, True))
+    else:
+        uid = TICKET_UID.get((lookup_label, False, False))
+    if uid is None:
         return None
-    uid, code, dist, rc, fr, en = cat
-    return EventKey(age_code, gender, uid, code, dist, rc, fr, en)
+    return EventKey(age_code, gender, uid, is_relay=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -917,6 +898,198 @@ class MDB:
 # --------------------------------------------------------------------------- #
 # Main loader
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# TemplateIndex — authoritative event structure from the supplied MDB
+# --------------------------------------------------------------------------- #
+@dataclass
+class TemplateStyle:
+    swim_style_id: int
+    uniqueid: int
+    name: str | None
+    distance: int | None
+    relay_count: int
+
+@dataclass
+class TemplateAgeGroup:
+    agegroup_id: int
+    amin: int | None
+    amax: int | None
+    gender: int | None
+
+@dataclass
+class TemplateEvent:
+    swim_event_id: int
+    swim_style_id: int
+    uniqueid: int
+    gender: int
+    round: int
+    event_number: int | None
+    session_id: int | None
+    masters: bool
+    agegroups: list[TemplateAgeGroup]
+
+
+class TemplateIndex:
+    """Snapshot of the supplied .mdb's event structure.
+
+    Built once before any write.  Provides lookups:
+      - styles_by_uid  : UNIQUEID -> TemplateStyle
+      - events_by_uid_gender : (UNIQUEID, GENDER) -> list[TemplateEvent]
+        (typically 2 entries: prelim + final; Masters events are single
+         timed-finals)
+      - is_first_run   : True iff zero SWIMRESULT + zero RELAY rows
+    """
+
+    def __init__(self, db: "MDB"):
+        # Styles — only interested in lifesaving-catalog rows (STROKE=0).
+        self.styles_by_uid: dict[int, TemplateStyle] = {}
+        for sid, uid, name, dist, rc, stroke in db.query(
+            "SELECT SWIMSTYLEID, UNIQUEID, NAME, DISTANCE, RELAYCOUNT, STROKE "
+            "FROM SWIMSTYLE"):
+            if uid is None:
+                continue
+            uid_i = int(uid)
+            # We don't filter by stroke=0 here — the template has some
+            # swim strokes too, but our ticket UIDs all fall in the 500+
+            # range and thus never collide.
+            self.styles_by_uid[uid_i] = TemplateStyle(
+                swim_style_id=int(sid), uniqueid=uid_i,
+                name=name,
+                distance=int(dist) if dist is not None else None,
+                relay_count=int(rc) if rc is not None else 1)
+
+        # Age groups grouped by SWIMEVENTID
+        ag_by_event: dict[int, list[TemplateAgeGroup]] = defaultdict(list)
+        for agid, seid, amin, amax, gen in db.query(
+            "SELECT AGEGROUPID, SWIMEVENTID, AGEMIN, AGEMAX, GENDER "
+            "FROM AGEGROUP"):
+            if seid is None:
+                continue
+            ag_by_event[int(seid)].append(TemplateAgeGroup(
+                agegroup_id=int(agid),
+                amin=int(amin) if amin is not None else None,
+                amax=int(amax) if amax is not None else None,
+                gender=int(gen) if gen is not None else None))
+
+        # Events
+        self.events_by_uid_gender: dict[tuple, list[TemplateEvent]] = defaultdict(list)
+        for eid, styid, gen, rnd, enum, ses, mas in db.query(
+            "SELECT SWIMEVENTID, SWIMSTYLEID, GENDER, ROUND, EVENTNUMBER, "
+            "       SWIMSESSIONID, MASTERS FROM SWIMEVENT"):
+            if styid is None or gen is None:
+                continue
+            styid_i = int(styid)
+            # Find the UNIQUEID for this SWIMSTYLEID
+            uid = None
+            for s in self.styles_by_uid.values():
+                if s.swim_style_id == styid_i:
+                    uid = s.uniqueid; break
+            if uid is None:
+                continue
+            ev = TemplateEvent(
+                swim_event_id=int(eid), swim_style_id=styid_i,
+                uniqueid=uid, gender=int(gen),
+                round=int(rnd) if rnd is not None else 0,
+                event_number=int(enum) if enum is not None else None,
+                session_id=int(ses) if ses is not None else None,
+                masters=(mas == "T"),
+                agegroups=ag_by_event.get(int(eid), []))
+            self.events_by_uid_gender[(uid, int(gen))].append(ev)
+
+        # Pre-existing inscriptions → drives "first run vs re-run" detection
+        self._has_results = any(True for _ in db.query(
+            "SELECT TOP 1 SWIMRESULTID FROM SWIMRESULT"))
+        if not self._has_results:
+            self._has_results = any(True for _ in db.query(
+                "SELECT TOP 1 RELAYID FROM RELAY"))
+
+    @property
+    def is_first_run(self) -> bool:
+        return not self._has_results
+
+    def find_event(self, uid: int, gender: int, masters: bool
+                    ) -> TemplateEvent | None:
+        """Pick the SWIMEVENT for (uid, gender) most appropriate for the
+        ticket's age bracket.  For 15-18 / Open we want ROUND=2 (prelim);
+        for Masters we want ROUND=1 (timed final).  If the preferred
+        round isn't available, fall back to any event for this (uid, gen).
+        """
+        candidates = self.events_by_uid_gender.get((uid, gender), [])
+        if not candidates:
+            return None
+        if masters:
+            ms = [e for e in candidates if e.masters or e.round == ROUND_TIMED_FINAL]
+            if ms:
+                return ms[0]
+        else:
+            # Prefer prelim, then timed-final, then first
+            for r in (ROUND_PRELIM, ROUND_TIMED_FINAL, ROUND_FINAL):
+                for e in candidates:
+                    if e.round == r and not e.masters:
+                        return e
+        return candidates[0]
+
+
+def pick_agegroup_for_individual(
+        event: TemplateEvent, age_code: str, athlete_age: int | None
+) -> TemplateAgeGroup | None:
+    """Pick the AGEGROUP within `event` that matches the ticket's age
+    bracket.  Returns None if no match."""
+    if age_code == "1518":
+        for a in event.agegroups:
+            if a.amin == 15 and a.amax == 18:
+                return a
+    elif age_code == "OPEN":
+        # '19 & over' — AGEMAX is 99, -1 or None
+        for a in event.agegroups:
+            if a.amin == 19 and (a.amax in (99, -1, None)):
+                return a
+    elif age_code == "MASTERS":
+        if athlete_age is None:
+            return None
+        for a in event.agegroups:
+            if a.amin is None or a.amax is None:
+                continue
+            # skip the 15-18 and 19-99 brackets if present on the same event
+            if (a.amin, a.amax) in ((15, 18), (19, 99), (19, -1)):
+                continue
+            lo = a.amin
+            hi = 10**9 if a.amax < 0 else a.amax
+            if lo <= athlete_age <= hi:
+                return a
+    return None
+
+
+def pick_agegroup_for_relay(
+        event: TemplateEvent, age_code: str, squad_age_sum: int | None
+) -> TemplateAgeGroup | None:
+    """Pick the AGEGROUP for a relay in `event`.  15-18/Open use their
+    named bracket; Masters relays route by total-age-sum to the matching
+    bracket."""
+    if age_code == "1518":
+        for a in event.agegroups:
+            if a.amin == 15 and a.amax == 18:
+                return a
+    elif age_code == "OPEN":
+        for a in event.agegroups:
+            if a.amin == 19 and (a.amax in (99, -1, None)):
+                return a
+    elif age_code == "MASTERS":
+        if squad_age_sum is None:
+            return None
+        for a in event.agegroups:
+            if a.amin is None or a.amax is None:
+                continue
+            # skip 15-18 and 19-99 if present
+            if a.amin in (15, 19):
+                continue
+            lo = a.amin
+            hi = 10**9 if a.amax < 0 else a.amax
+            if lo <= squad_age_sum <= hi:
+                return a
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--xlsx", required=True, type=Path)
@@ -924,9 +1097,6 @@ def main():
                     help="Target .mdb file (will be modified).")
     ap.add_argument("--dry-run", action="store_true",
                     help="Parse and plan everything but rollback at the end.")
-    ap.add_argument("--wipe", action="store_true",
-                    help="Delete any existing clubs/athletes/events/entries "
-                         "before loading.")
     ap.add_argument("--issues-full", action="store_true",
                     help="List every issue, no per-category cap. "
                          "Useful when handing the report to someone who "
@@ -952,7 +1122,7 @@ def main():
     # Aggregate
     clubs: dict[str, str] = {}          # norm_name -> display name
     athletes: dict[tuple, Inscription] = {}  # (norm first,last,license) -> record
-    events: dict[tuple, EventKey] = {}  # EventKey.key() -> EventKey
+    events_in_xlsx: dict[tuple, EventKey] = {}   # ek.key() -> EventKey
     ind_entries: list[tuple] = []       # (athlete_key, event_key, best_ms)
     relay_groups: dict[tuple, list[tuple]] = defaultdict(list)
     # relay_groups key: (club_norm, event_key) -> list[(athlete_key, best_ms)]
@@ -964,69 +1134,155 @@ def main():
         ath_key = (norm_key(ins.first, ins.last), ins.license or "")
         if ath_key not in athletes:
             athletes[ath_key] = ins
-        events.setdefault(ins.event.key(), ins.event)
+        events_in_xlsx.setdefault(ins.event.key(), ins.event)
 
-        if ins.event.relay_count == 1:
-            ind_entries.append((ath_key, ins.event.key(), ins.best_time_ms))
-        else:
+        if ins.event.is_relay:
             relay_groups[(club_norm, ins.event.key())].append(
                 (ath_key, ins.best_time_ms))
+        else:
+            ind_entries.append((ath_key, ins.event.key(), ins.best_time_ms))
 
     print(f"  distinct clubs:    {len(clubs)}")
     print(f"  distinct athletes: {len(athletes)}")
-    print(f"  distinct events:   {len(events)}  "
-          f"(individual: {sum(1 for k,e in events.items() if e.relay_count==1)}, "
-          f"relay: {sum(1 for k,e in events.items() if e.relay_count>1)})")
+    print(f"  distinct tickets:  {len(events_in_xlsx)}  "
+          f"(individual: {sum(1 for e in events_in_xlsx.values() if not e.is_relay)}, "
+          f"relay: {sum(1 for e in events_in_xlsx.values() if e.is_relay)})")
     print(f"  individual entries: {len(ind_entries)}")
     print(f"  relay squads:      {len(relay_groups)}")
 
-    # ----- Cross-row data-quality checks -----
-    # athletes missing a birthdate (will fall back to xlsx bracket on any
-    # future MM age-split — fine but worth flagging).
+    # ----- open MDB + load template structure -----
+    print(f"\nOpening {args.mdb}...")
+    db = MDB(args.mdb, dry_run=args.dry_run)
+    print(f"  starting BS_GLOBAL_UID = {db._uid}")
+
+    template = TemplateIndex(db)
+    n_events_in_template = sum(
+        len(v) for v in template.events_by_uid_gender.values())
+    print(f"  template: {len(template.styles_by_uid)} SWIMSTYLE rows, "
+          f"{n_events_in_template} SWIMEVENTs")
+    if template.is_first_run:
+        print(f"  no inscriptions in template — FIRST RUN")
+    else:
+        print(f"  existing inscriptions detected — UPDATE RE-RUN")
+
+    # ========================================================== #
+    # VALIDATION PASS — no writes before this succeeds            #
+    # ========================================================== #
+    fatal: list[str] = []
+    # For each distinct EventKey in the xlsx, check that the template has
+    # a matching SWIMEVENT + (for individuals) that the required age
+    # bracket exists.
+    for ek, ev in events_in_xlsx.items():
+        style = template.styles_by_uid.get(ev.uniqueid)
+        if style is None:
+            fatal.append(
+                f"Ticket {ev.label}: template has no SWIMSTYLE "
+                f"with UNIQUEID={ev.uniqueid}")
+            continue
+        tevent = template.find_event(ev.uniqueid, ev.gender,
+                                      masters=(ev.age_code == "MASTERS"))
+        if tevent is None:
+            fatal.append(
+                f"Ticket {ev.label}: template has SWIMSTYLE for "
+                f"UID {ev.uniqueid} but no SWIMEVENT with gender={ev.gender} "
+                f"matching age code {ev.age_code!r}")
+            continue
+        if ev.is_relay:
+            # Confirm the event has at least one AGEGROUP of the right kind
+            if ev.age_code == "1518" or ev.age_code == "OPEN":
+                need_min = 15 if ev.age_code == "1518" else 19
+                if not any(a.amin == need_min for a in tevent.agegroups):
+                    fatal.append(
+                        f"Ticket {ev.label}: SWIMEVENT #{tevent.event_number} "
+                        f"has no AGEGROUP for bracket {ev.age_code}")
+            elif ev.age_code == "MASTERS":
+                # Age-sum brackets — just check we have at least one
+                ag = [a for a in tevent.agegroups
+                      if a.amin is not None and a.amin >= 100]
+                if not ag:
+                    fatal.append(
+                        f"Ticket {ev.label}: Masters relay but SWIMEVENT "
+                        f"#{tevent.event_number} has no age-sum AGEGROUP")
+        else:
+            # Individual: need an AGEGROUP matching this bracket type
+            if ev.age_code == "1518":
+                if not any(a.amin == 15 and a.amax == 18
+                            for a in tevent.agegroups):
+                    fatal.append(
+                        f"Ticket {ev.label}: SWIMEVENT #{tevent.event_number} "
+                        f"has no 15-18 AGEGROUP")
+            elif ev.age_code == "OPEN":
+                if not any(a.amin == 19 for a in tevent.agegroups):
+                    fatal.append(
+                        f"Ticket {ev.label}: SWIMEVENT #{tevent.event_number} "
+                        f"has no 19+ AGEGROUP")
+            elif ev.age_code == "MASTERS":
+                masters_ag = [a for a in tevent.agegroups
+                              if a.amin is not None
+                              and a.amin >= 25 and a.amin < 100]
+                if not masters_ag:
+                    fatal.append(
+                        f"Ticket {ev.label}: Masters individual but "
+                        f"SWIMEVENT #{tevent.event_number} has no 5-year "
+                        f"Masters AGEGROUPs")
+
+    if fatal:
+        print("\n" + "=" * 60)
+        print("  FATAL: template/xlsx mismatch — aborting import")
+        print("=" * 60)
+        for f in fatal:
+            print(f"  - {f}")
+        print("=" * 60)
+        print(f"\n{len(fatal)} fatal error(s).  No writes performed.")
+        db.conn.rollback()
+        db.close()
+        sys.exit(2)
+
+    # ----- Cross-row data-quality checks (warnings only) -----
     for akey, ins in athletes.items():
         if ins.birthdate is None:
             issues.warn(
                 "no_dob",
-                f"{ins.first} {ins.last} ({ins.club}) has no birthdate — "
-                f"age-based routing will fall back to ticket bracket")
+                f"{ins.first} {ins.last} ({ins.club}) has no birthdate")
 
-    # Individual inscription age sanity-check: compare the computed age
-    # at AGE_DATE to the age bracket the ticket is for.  Flag mismatches.
-    bracket_by_code = {k: (v[0], v[1]) for k, v in AGE_GROUPS.items()}
+    # Individual inscription age sanity-check
     for ins in inscriptions:
-        if ins.event.relay_count != 1:
-            continue       # relays aren't individually age-bracketed here
+        if ins.event.is_relay:
+            continue
         age = age_at(ins.birthdate)
         if age is None:
             continue
-        amin, amax = bracket_by_code[ins.event.age_code]
-        if age < amin or age > amax:
-            issues.warn(
-                "age_bracket_mismatch",
-                f"{ins.first} {ins.last} age {age} outside ticket bracket "
-                f"{ins.event.age_code} ({amin}-{amax}) "
-                f"for {ins.event.name_fr}")
+        ac = ins.event.age_code
+        if ac == "1518" and not (15 <= age <= 18):
+            issues.warn("age_bracket_mismatch",
+                f"{ins.first} {ins.last} age {age} outside 15-18 bracket")
+        elif ac == "OPEN" and age < 19:
+            issues.warn("age_bracket_mismatch",
+                f"{ins.first} {ins.last} age {age} too young for Open (19+)")
+        elif ac == "MASTERS" and age < 25:
+            issues.warn("age_bracket_mismatch",
+                f"{ins.first} {ins.last} age {age} too young for Masters (25+)")
 
-    # Relay squads that are incomplete (fewer athletes than required
-    # by the event's relay_count) — MM user will need to fill them in.
+    # Relay squads that are incomplete (fewer athletes than relay_count)
     for (cnorm, ekey), members in relay_groups.items():
-        ev = events[ekey]
-        leftovers = len(members) % ev.relay_count
-        if len(members) < ev.relay_count:
+        ev = events_in_xlsx[ekey]
+        style = template.styles_by_uid[ev.uniqueid]
+        need = style.relay_count or 4
+        leftovers = len(members) % need
+        if len(members) < need:
             issues.warn(
                 "incomplete_relay",
-                f"{clubs[cnorm]}: {len(members)}/{ev.relay_count} athletes "
-                f"for {ev.name_fr} ({ev.age_code})")
+                f"{clubs[cnorm]}: {len(members)}/{need} athletes "
+                f"for UID {ev.uniqueid} ({ev.age_code})")
         elif leftovers:
-            n_squads = (len(members) + ev.relay_count - 1) // ev.relay_count
+            n_squads = (len(members) + need - 1) // need
             issues.note(
                 "extra_relay_members",
                 f"{clubs[cnorm]}: {len(members)} athletes for "
-                f"{ev.name_fr} ({ev.age_code}) — split into {n_squads} "
-                f"squads, the last one has only {leftovers}/{ev.relay_count}")
+                f"UID {ev.uniqueid} ({ev.age_code}) — split into {n_squads} "
+                f"squads, the last one has only {leftovers}/{need}")
 
-    # Non-race-only clubs / athletes (informational).  Re-scan the xlsx
-    # so we can compare what's in the sheet vs what we imported.
+    # Non-race-only clubs / athletes (informational)
     wb = openpyxl.load_workbook(args.xlsx, data_only=True)
     ws_all = wb["Attendees"]
     rows_all = list(ws_all.iter_rows(values_only=True))
@@ -1034,17 +1290,13 @@ def main():
     i_f  = hdr.index("First Name")
     i_l  = hdr.index("Last Name")
     i_cl = hdr.index("Club")
-    i_lc = hdr.index("NRAN")
     all_clubs: set[str] = set()
-    all_names: set[str] = set()   # athlete name only (not keyed on license)
+    all_names: set[str] = set()
     for r in rows_all[1:]:
         if not r or not r[i_f] or not r[i_l]:
             continue
         all_clubs.add(norm_key(r[i_cl] or "Unattached"))
         all_names.add(norm_key(r[i_f], r[i_l]))
-    # Athletes that DID get imported — collapse to name-only identifiers
-    # so that someone who has both a race row (with license) and a Banquet
-    # row (no license) is counted as one person, not two.
     race_names = {akey[0] for akey in athletes.keys()}
     race_clubs = set(clubs.keys())
     n_club_skipped = len(all_clubs - race_clubs)
@@ -1060,17 +1312,13 @@ def main():
                     f"— not imported as athletes")
 
     # ----- Fuzzy duplicate detection (clubs + athletes) -----
-    # Count rows per club display-name so the warning can show scale.
     club_row_counts: dict[str, int] = defaultdict(int)
     for ins in inscriptions:
         club_row_counts[ins.club] += 1
-
     for a, b, sim, ca, cb in find_fuzzy_club_duplicates(dict(club_row_counts)):
         issues.warn(
             "possible_duplicate_club",
-            f"{a!r} ({ca} rows) vs {b!r} ({cb} rows) "
-            f"— similarity {sim:.2f}")
-
+            f"{a!r} ({ca} rows) vs {b!r} ({cb} rows) — similarity {sim:.2f}")
     fuzzy = find_fuzzy_athlete_duplicates(athletes)
     for (name_a, club_a, name_b, club_b, lic) in fuzzy["same_license"]:
         issues.warn(
@@ -1088,48 +1336,21 @@ def main():
             f"{name!r} born {dob} appears in both {club_a!r} and "
             f"{club_b!r} — probably the same person")
 
-    # ----- open MDB -----
-    print(f"\nOpening {args.mdb}...")
-    db = MDB(args.mdb, dry_run=args.dry_run)
-    print(f"  starting BS_GLOBAL_UID = {db._uid}")
-
-    if args.wipe:
-        for sql in [
-            "DELETE FROM RELAYPOSITION",
-            "DELETE FROM RELAY",
-            "DELETE FROM SWIMRESULT",
-            "DELETE FROM AGEGROUP",
-            "DELETE FROM SWIMEVENT",
-            "DELETE FROM SWIMSESSION",
-            "DELETE FROM ATHLETE",
-            "DELETE FROM CLUB",
-            "DELETE FROM SWIMSTYLE WHERE SWIMSTYLEID > 1058",
-        ]:
-            if not args.dry_run:
-                db.cur.execute(sql)
-        print("  wiped existing clubs/athletes/events/entries")
-
-    # ----- Preload existing rows (for additive/idempotent re-runs) -----
+    # ----- Preload existing rows for additive mode -----
     stats = {
-        "club_new": 0, "club_updated": 0,
-        "athlete_new": 0, "athlete_gender_fix": 0,
-        "athlete_license_fix": 0, "athlete_birthdate_fix": 0,
-        "athlete_club_fix": 0,
-        "style_new": 0,
-        "session_new": 0,
-        "event_new": 0, "agegroup_new": 0,
+        "club_new": 0, "athlete_new": 0,
+        "athlete_gender_fix": 0, "athlete_license_fix": 0,
+        "athlete_birthdate_fix": 0, "athlete_club_fix": 0,
         "entry_new": 0, "entry_time_faster": 0,
         "relay_new": 0, "relayposition_new": 0,
-        "combined_new": 0,
+        "masters_skipped_no_dob": 0,
     }
 
-    # CLUB lookup: norm_name -> (CLUBID, NAME)
     existing_clubs: dict[str, tuple[int, str]] = {}
     for cid, name in db.query("SELECT CLUBID, NAME FROM CLUB"):
         if name:
             existing_clubs[norm_key(name)] = (int(cid), name)
 
-    # ATHLETE lookup: (norm first+last, license_norm) -> full row dict
     existing_athletes: dict[tuple, dict] = {}
     for aid, clubid, first, last, gender, bdate, lic in db.query(
         "SELECT ATHLETEID, CLUBID, FIRSTNAME, LASTNAME, GENDER, BIRTHDATE, "
@@ -1143,55 +1364,14 @@ def main():
             "LICENSE":   lic,
         }
 
-    # SWIMSTYLE lookup: UNIQUEID -> SWIMSTYLEID   (only catalog rows, STROKE=0)
-    existing_styles: dict[int, int] = {}
-    for sid, uid in db.query(
-        "SELECT SWIMSTYLEID, UNIQUEID FROM SWIMSTYLE "
-        "WHERE STROKE=0 AND UNIQUEID IS NOT NULL"):
-        if uid is not None:
-            existing_styles[int(uid)] = int(sid)
-
-    # SWIMEVENT lookup: events grouped by (SWIMSTYLEID, GENDER).
-    # Each entry is a list of sub-events (SWIMEVENTID, AGEGROUPID, AMIN, AMAX).
-    # Our model keeps one AGEGROUP per SWIMEVENT (= one age bracket per
-    # event), but MM users may have split an event into several sub-events
-    # after we created them (e.g. 15-18 -> 15-16 + 17-18).  The re-run logic
-    # recognises that case via "subset partitioning".
-    events_by_sg: dict[tuple, list[tuple]] = defaultdict(list)
-    for eid, styid, gen, agid, amin, amax in db.query(
-        "SELECT e.SWIMEVENTID, e.SWIMSTYLEID, e.GENDER, "
-        "       a.AGEGROUPID, a.AGEMIN, a.AGEMAX "
-        "FROM SWIMEVENT e LEFT JOIN AGEGROUP a "
-        "       ON a.SWIMEVENTID=e.SWIMEVENTID"):
-        if styid is None or gen is None:
-            continue
-        events_by_sg[(int(styid), int(gen))].append((
-            int(eid),
-            int(agid) if agid is not None else None,
-            int(amin) if amin is not None else None,
-            int(amax) if amax is not None else None,
-        ))
-
-    # SWIMRESULT lookup: (ATHLETEID, SWIMEVENTID) -> (SWIMRESULTID, ENTRYTIME)
     existing_results: dict[tuple, tuple[int, int | None]] = {}
     for srid, aid, seid, etime in db.query(
         "SELECT SWIMRESULTID, ATHLETEID, SWIMEVENTID, ENTRYTIME FROM SWIMRESULT"):
         if aid is None or seid is None:
             continue
         existing_results[(int(aid), int(seid))] = (
-            int(srid),
-            int(etime) if etime is not None else None,
-        )
+            int(srid), int(etime) if etime is not None else None)
 
-    # RELAY lookup: (CLUBID, SWIMEVENTID, TEAMNUMBER) -> RELAYID
-    existing_relays: dict[tuple, int] = {}
-    for rid, cid, seid, tnum in db.query(
-        "SELECT RELAYID, CLUBID, SWIMEVENTID, TEAMNUMBER FROM RELAY"):
-        if cid is None or seid is None:
-            continue
-        existing_relays[(int(cid), int(seid), int(tnum or 0))] = int(rid)
-
-    # RELAYPOSITION lookup: set of (RELAYID, RELAYNUMBER)
     existing_relay_pos: set[tuple] = set()
     for rid, rnum in db.query(
         "SELECT RELAYID, RELAYNUMBER FROM RELAYPOSITION"):
@@ -1199,228 +1379,23 @@ def main():
             continue
         existing_relay_pos.add((int(rid), int(rnum)))
 
-    # Is this a fresh meet or a re-run?
-    total_events_present = sum(len(v) for v in events_by_sg.values())
-    is_update = bool(existing_clubs or existing_athletes or total_events_present)
-    if is_update:
-        print(f"\n  Existing data detected — running in ADDITIVE mode.")
-        print(f"    clubs already present:     {len(existing_clubs)}")
-        print(f"    athletes already present:  {len(existing_athletes)}")
-        print(f"    events already present:    {total_events_present}")
-        print(f"    entries already present:   {len(existing_results)}")
-        print(f"    relays already present:    {len(existing_relays)}")
-    else:
-        print(f"\n  Empty meet — doing a fresh load.")
+    # Per-(club, event, squad-index) stable key for relay dedup
+    existing_relays_stable: dict[tuple, int] = {}
+    _club_squad_count: dict[tuple, int] = defaultdict(int)
+    for rid_row, club_row, event_row, _tn in db.query(
+        "SELECT RELAYID, CLUBID, SWIMEVENTID, TEAMNUMBER "
+        "FROM RELAY ORDER BY RELAYID"):
+        if club_row is None or event_row is None:
+            continue
+        ce = (int(club_row), int(event_row))
+        _club_squad_count[ce] += 1
+        existing_relays_stable[(int(club_row), int(event_row),
+                                 _club_squad_count[ce])] = int(rid_row)
 
-    if args.wipe:
-        if is_update:
-            print("  WARNING: --wipe will delete existing data before loading.")
-        for sql in [
-            "DELETE FROM RELAYPOSITION",
-            "DELETE FROM RELAY",
-            "DELETE FROM SWIMRESULT",
-            "DELETE FROM AGEGROUP",
-            "DELETE FROM SWIMEVENT",
-            "DELETE FROM SWIMSESSION",
-            "DELETE FROM ATHLETE",
-            "DELETE FROM CLUB",
-            "DELETE FROM SWIMSTYLE WHERE SWIMSTYLEID > 1058",
-        ]:
-            if not args.dry_run:
-                db.cur.execute(sql)
-        print("  wiped existing clubs/athletes/events/entries")
-        # Reset lookups to empty — we just deleted everything
-        existing_clubs.clear()
-        existing_athletes.clear()
-        existing_styles.clear()
-        events_by_sg.clear()
-        existing_results.clear()
-        existing_relays.clear()
-        existing_relay_pos.clear()
-        is_update = False
+    rows = db.query("SELECT COALESCE(MAX(TEAMNUMBER), 0) FROM RELAY")
+    next_team_no = int(rows[0][0]) if rows and rows[0][0] is not None else 0
 
     INT_MAX = 2147483647
-
-    # ----- SWIMSTYLE (Société de Sauvetage catalog) -----
-    # STROKE=0 TECHNIQUE=0 tells SPLASH this is a catalog item.  Keyed by
-    # UNIQUEID; already-present catalog entries reuse the same SWIMSTYLEID.
-    style_ids: dict[int, int] = dict(existing_styles)
-    sort_seed = 1000 + len(existing_styles)
-    distinct_styles: dict[int, "EventKey"] = {}
-    for ev in events.values():
-        distinct_styles.setdefault(ev.uniqueid, ev)
-    for uid, ev in sorted(distinct_styles.items()):
-        if uid in style_ids:
-            continue
-        sid = db.next_id()
-        style_ids[uid] = sid
-        sort_seed += 1
-        db.insert("SWIMSTYLE", {
-            "SWIMSTYLEID": sid,
-            "CODE":        truncate(ev.code, 10) or None,
-            "NAME":        truncate(ev.name_fr, 50),
-            "DISTANCE":    ev.distance,
-            "RELAYCOUNT":  ev.relay_count,
-            "STROKE":      LIFESAVING_STROKE,
-            "TECHNIQUE":   LIFESAVING_TECHNIQUE,
-            "UNIQUEID":    uid,
-            "SORTCODE":    sort_seed,
-        })
-        stats["style_new"] += 1
-
-    # ----- SWIMSESSION (placeholder) -----
-    # Reuse the first existing session if one is present; otherwise create
-    # a new placeholder.  We never modify an existing session (user may
-    # have reorganised it in MM).
-    rows = db.query("SELECT SWIMSESSIONID FROM SWIMSESSION "
-                    "ORDER BY SWIMSESSIONID")
-    if rows:
-        session_id = int(rows[0][0])
-    else:
-        session_id = db.next_id()
-        db.insert("SWIMSESSION", {
-            "SWIMSESSIONID":     session_id, "SESSIONNUMBER": 1,
-            "NAME":              truncate(PLACEHOLDER_SESSION_NAME, 100),
-            "STARTDATE":         PLACEHOLDER_SESSION_DATE,
-            "DAYTIME":           PLACEHOLDER_SESSION_DATE,
-            "COURSE":            COURSE_LCM, "POOLTYPE": POOLTYPE_LCM,
-            "LANEMIN": 1, "LANEMAX": 8, "TIMING": 1, "TOUCHPADMODE": 1,
-            "MAXENTRIESATHLETE": 10, "MAXENTRIESRELAY": 5,
-            "ROUNDTOTENTHS":     "F",
-            "FOLLOWING":         "F",
-            "POOLGLOBAL":        "F",
-        })
-        stats["session_new"] = 1
-
-    # ----- SWIMEVENT + AGEGROUP -----
-    # Each xlsx event key resolves to a list of target (SWIMEVENTID, AGEGROUPID,
-    # AGEMIN, AGEMAX). For the common case there is exactly one target; for
-    # MM-split cases (the meet director replaced one event with several
-    # narrower age-bracket events) there are several — entries are then
-    # routed to the one covering the athlete's real age.
-    event_targets: dict[tuple, list[tuple]] = {}
-
-    def _span(amin, amax):
-        lo = 0   if amin is None or amin < 0 else amin
-        hi = 999 if amax is None or amax < 0 else amax
-        return lo, hi
-
-    # Figure out the next EVENTNUMBER starting point
-    rows = db.query("SELECT COALESCE(MAX(EVENTNUMBER),0) FROM SWIMEVENT")
-    next_event_no = int(rows[0][0]) if rows and rows[0][0] is not None else 0
-
-    # Sort key for the event list:
-    #   1) by catalog UID           — all "Nage avec obstacles" together, etc.
-    #   2) by age bracket           — 15-18, then MASTERS, then OPEN
-    #   3) by gender, F before M    — (gender 2 before gender 1; 0=Mixed last)
-    # The age bracket order happens to fall out of alphabetical string order
-    # on the age_code values "1518" < "MASTERS" < "OPEN".
-    _AGE_ORDER = {"1518": 0, "MASTERS": 1, "OPEN": 2}
-    _GENDER_ORDER = {GENDER_FEMALE: 0, GENDER_MALE: 1, GENDER_ALL: 2}
-
-    for ek, ev in sorted(
-            events.items(),
-            key=lambda kv: (kv[1].uniqueid,
-                            _AGE_ORDER.get(kv[1].age_code, 99),
-                            _GENDER_ORDER.get(kv[1].gender, 99))):
-        style_id = style_ids[ev.uniqueid]
-        age_min, age_max, _age_name = AGE_GROUPS[ev.age_code]
-        xmin, xmax = age_min, age_max
-        sg_key = (style_id, ev.gender)
-        candidates = events_by_sg.get(sg_key, [])
-
-        #
-        # 1) Exact match (same [amin, amax]).
-        exact = [c for c in candidates
-                 if c[2] == xmin and c[3] == xmax]
-        if exact:
-            event_targets[ek] = [exact[0]]
-            continue
-
-        #
-        # 2) MM-split: multiple existing events, each ⊆ [xmin, xmax], whose
-        #    union tiles [xmin, xmax] contiguously.  This takes precedence
-        #    over a single wider container (e.g. an Open [0,99] event) so
-        #    that narrower event brackets are preferred when they partition
-        #    our xlsx bracket exactly.
-        subsets = []
-        for c in candidates:
-            lo, hi = _span(c[2], c[3])
-            if xmin <= lo and hi <= xmax and (lo, hi) != (xmin, xmax):
-                subsets.append(c)
-        if subsets:
-            bounds = sorted([_span(c[2], c[3]) for c in subsets])
-            covered = xmin
-            gap = False
-            for lo, hi in bounds:
-                if lo > covered:
-                    gap = True; break
-                covered = max(covered, hi + 1)
-            if not gap and covered > xmax:
-                # Split detected — route entries to these sub-events
-                event_targets[ek] = subsets
-                continue
-
-        #
-        # 3) Single existing event whose bracket fully contains ours.
-        #    Prefer the tightest one.
-        containers = []
-        for c in candidates:
-            lo, hi = _span(c[2], c[3])
-            if lo <= xmin and xmax <= hi:
-                containers.append(c)
-        if containers:
-            containers.sort(key=lambda c: _span(c[2], c[3])[1] - _span(c[2], c[3])[0])
-            event_targets[ek] = [containers[0]]
-            continue
-
-        #
-        # 4) No match — create a brand-new SWIMEVENT + AGEGROUP.
-        next_event_no += 1
-        eid = db.next_id()
-        db.insert("SWIMEVENT", {
-            "SWIMEVENTID":         eid,
-            "EVENTNUMBER":         next_event_no,
-            "SWIMSESSIONID":       session_id,
-            "SWIMSTYLEID":         style_id,
-            "SORTCODE":            next_event_no,
-            "GENDER":              ev.gender,
-            "ROUND":               1,
-            "FINALORDER":          1,
-            "PREVEVENTID":         -1,
-            "ENTRYTIMECONVERSION": 1,
-            "ENTRYTIMEPERCENT":    2,
-            "SEEDINGGLOBAL":       "T",
-            "SEEDBONUSLAST":       "F",
-            "SEEDEXHLAST":         "F",
-            "SEEDLATEENTRYLAST":   "F",
-            "SPLASHMECANEDIT":     "F",
-            "TWOPERLANE":          "F",
-            "PFINEIGNORE":         "F",
-            "COMBINEAGEGROUPS":    "F",
-            "MASTERS": "T" if ev.age_code == "MASTERS" else "F",
-            "LANEMAX":             0,
-            "MAXENTRIES":          32767,
-            "FEE":                 0.0,
-        })
-        stats["event_new"] += 1
-
-        ag_id = db.next_id()
-        db.insert("AGEGROUP", {
-            "AGEGROUPID":    ag_id,
-            "SWIMEVENTID":   eid,
-            "AGEMIN":        age_min,
-            "AGEMAX":        age_max,
-            "GENDER":        ev.gender,
-            "SORTCODE":      1,
-            "AGEBYTOTAL":    "F", "ALLOFFICIAL": "T",
-            "FORCEPRELIM":   "T", "USEFORMEDALS": "T",
-            "USEFORSCORING": "T", "SEEDWITHTSONLY": "F",
-            "SCORETYPE":     1,   "RESULTCOUNT": 0,
-        })
-        stats["agegroup_new"] += 1
-        events_by_sg[sg_key].append((eid, ag_id, age_min, age_max))
-        event_targets[ek] = [(eid, ag_id, age_min, age_max)]
 
     # ----- CLUB -----
     club_ids: dict[str, int] = {}
@@ -1444,13 +1419,11 @@ def main():
 
     # ----- ATHLETE -----
     athlete_ids: dict[tuple, int] = {}
-    # Pre-compute per-athlete inferred gender from individual tickets
     inferred_gender: dict[tuple, int] = {}
     for e in inscriptions:
-        if e.event.relay_count != 1:
+        if e.event.is_relay:
             continue
         k = (norm_key(e.first, e.last), (e.license or "").strip())
-        # first individual-ticket gender wins (consistent for a given athlete)
         inferred_gender.setdefault(k, e.event.gender)
 
     for akey, ins in athletes.items():
@@ -1460,22 +1433,17 @@ def main():
             existing = existing_athletes[akey]
             aid = existing["ATHLETEID"]
             athlete_ids[akey] = aid
-            # Apply safe, additive updates
             updates = {}
-            # Gender: fix from 0/NULL -> 1/2 if we now know it
             if (existing["GENDER"] in (None, GENDER_ALL)
                     and new_gender in (GENDER_MALE, GENDER_FEMALE)):
                 updates["GENDER"] = new_gender
                 stats["athlete_gender_fix"] += 1
-            # License: fill in if missing
             if not existing["LICENSE"] and ins.license:
                 updates["LICENSE"] = truncate(ins.license, 20)
                 stats["athlete_license_fix"] += 1
-            # Birthdate: fill in if missing
             if existing["BIRTHDATE"] is None and ins.birthdate is not None:
                 updates["BIRTHDATE"] = ins.birthdate
                 stats["athlete_birthdate_fix"] += 1
-            # Club: update if the athlete moved between meets (rare)
             if existing["CLUBID"] != club_id:
                 updates["CLUBID"] = club_id
                 stats["athlete_club_fix"] += 1
@@ -1483,7 +1451,6 @@ def main():
                 db.update("ATHLETE", {"ATHLETEID": aid}, updates)
             continue
 
-        # New athlete
         aid = db.next_id()
         athlete_ids[akey] = aid
         db.insert("ATHLETE", {
@@ -1507,44 +1474,37 @@ def main():
         existing_athletes[akey] = {
             "ATHLETEID": aid, "CLUBID": club_id,
             "GENDER": new_gender, "BIRTHDATE": ins.birthdate,
-            "LICENSE": ins.license,
-        }
+            "LICENSE": ins.license}
 
     # ----- SWIMRESULT (individual entries) -----
-    # Deduplicate (athlete, event-key) pairs from the xlsx; keep the
-    # fastest best time when the same athlete appears multiple times.
+    # Dedup (athlete, ek) pairs, keeping fastest time
     best_by: dict[tuple, tuple[int | None, dt.date | None]] = {}
     for akey, ekey, cs in ind_entries:
         ath = athletes[akey]
-        bd = ath.birthdate
         cur = best_by.get((akey, ekey))
         if cur is None or (cs is not None and (cur[0] is None or cs < cur[0])):
-            best_by[(akey, ekey)] = (cs, bd)
-
-    def _route(targets: list[tuple], athlete_age: int | None,
-               fallback_min: int, fallback_max: int) -> tuple:
-        """Choose one (eid, agid, amin, amax) from the candidate targets
-        for an athlete.  Single target -> trivial.  Multiple targets
-        (MM-split) -> pick by athlete age; fall back to first target
-        if age is unknown."""
-        if len(targets) == 1:
-            return targets[0]
-        if athlete_age is not None:
-            for t in targets:
-                lo, hi = _span(t[2], t[3])
-                if lo <= athlete_age <= hi:
-                    return t
-        # No birthdate known — default to the first (e.g. lowest bracket)
-        return sorted(targets, key=lambda t: _span(t[2], t[3])[0])[0]
+            best_by[(akey, ekey)] = (cs, ath.birthdate)
 
     sr_batch: list[dict] = []
     for (akey, ekey), (cs, bd) in best_by.items():
-        aid = athlete_ids[akey]
-        ev = events[ekey]
-        age_min, age_max, _ = AGE_GROUPS[ev.age_code]
-        target = _route(event_targets[ekey], age_at(bd), age_min, age_max)
-        eid, ag_id, _, _ = target
+        ev = events_in_xlsx[ekey]
+        tevent = template.find_event(
+            ev.uniqueid, ev.gender, masters=(ev.age_code == "MASTERS"))
+        # validation passed, so tevent is guaranteed
+        athlete_age = age_at(bd)
+        ag = pick_agegroup_for_individual(tevent, ev.age_code, athlete_age)
+        if ag is None:
+            # Only possible for Masters with no DOB — warn and skip
+            if ev.age_code == "MASTERS":
+                ins = athletes[akey]
+                issues.warn("masters_no_dob",
+                    f"{ins.first} {ins.last} Masters entry skipped — "
+                    f"no birthdate to route into a 5-year bracket")
+                stats["masters_skipped_no_dob"] += 1
+            continue
 
+        aid = athlete_ids[akey]
+        eid = tevent.swim_event_id
         if (aid, eid) in existing_results:
             _sr_id, cur_cs = existing_results[(aid, eid)]
             if cs is not None and (cur_cs is None or cs < cur_cs):
@@ -1557,7 +1517,7 @@ def main():
             "SWIMRESULTID":  sr_id,
             "ATHLETEID":     aid,
             "SWIMEVENTID":   eid,
-            "AGEGROUPID":    ag_id,
+            "AGEGROUPID":    ag.agegroup_id,
             "ENTRYTIME":     cs,
             "ENTRYCOURSE":   0,
             "RESULTSTATUS":  0,
@@ -1566,9 +1526,7 @@ def main():
             "FINALFIX":      "F",
             "LATEENTRY":     "F",
             "NOADVANCE":     "F",
-            "BACKUPTIME1":   0,
-            "BACKUPTIME2":   0,
-            "BACKUPTIME3":   0,
+            "BACKUPTIME1":   0, "BACKUPTIME2": 0, "BACKUPTIME3": 0,
             "FINISHJUDGE":   0,
             "PADTIME":       INT_MAX,
             "QTCOURSE":      0,
@@ -1581,56 +1539,55 @@ def main():
     db.insert_many("SWIMRESULT", sr_batch)
 
     # ----- RELAY + RELAYPOSITION -----
-    # Global TEAMNUMBER / RELAYCODE counter — both must be unique across
-    # ALL relays in the meet (not just per club).  SPLASH's seeding module
-    # crashes (TBSItem.DoLoadColumns) when two relays in the same event
-    # share a TEAMNUMBER/RELAYCODE.  We keep a per-club squad index only
-    # for the display name.
-    rows = db.query("SELECT COALESCE(MAX(TEAMNUMBER), 0) FROM RELAY")
-    next_team_no = int(rows[0][0]) if rows and rows[0][0] is not None else 0
-
-    # Also remember which (club, event, squad-index-within-club) we've seen
-    # — that's the *stable* identity across re-runs (TEAMNUMBER isn't,
-    # because the global counter shifts if rows were inserted/deleted).
-    existing_relays_stable: dict[tuple, int] = {}
-    # Build it from the current DB state
-    _club_squad_count: dict[tuple, int] = defaultdict(int)
-    for rid_row, club_row, event_row, _tn in db.query(
-        "SELECT RELAYID, CLUBID, SWIMEVENTID, TEAMNUMBER "
-        "FROM RELAY ORDER BY RELAYID"):
-        if club_row is None or event_row is None:
-            continue
-        key_ce = (int(club_row), int(event_row))
-        _club_squad_count[key_ce] += 1
-        sub_idx = _club_squad_count[key_ce]
-        existing_relays_stable[(int(club_row), int(event_row), sub_idx)] = int(rid_row)
-
     for (cnorm, ekey), members in relay_groups.items():
-        ev = events[ekey]
-        age_min, age_max, _age_name = AGE_GROUPS[ev.age_code]
+        ev = events_in_xlsx[ekey]
+        tevent = template.find_event(
+            ev.uniqueid, ev.gender, masters=(ev.age_code == "MASTERS"))
+        style = template.styles_by_uid[ev.uniqueid]
+        relay_size = style.relay_count or 4
         club_id = club_ids[cnorm]
-        # Relays don't split by age; pick the first target (relays live on
-        # the bracket as a whole, not per-athlete)
-        rel_target = event_targets[ekey][0]
-        event_id, relay_ag, _, _ = rel_target
-        # Chunk members into squads of ev.relay_count.  Any leftover
-        # athletes become an additional (incomplete) squad so MM can
-        # show them — the coach then picks the final line-up inside MM.
+        event_id = tevent.swim_event_id
+
+        # Chunk into squads
         chunks: list[list[tuple]] = []
         buf: list[tuple] = []
         for m in members:
             buf.append(m)
-            if len(buf) == ev.relay_count:
+            if len(buf) == relay_size:
                 chunks.append(buf); buf = []
         if buf:
-            chunks.append(buf)    # leftover squad (may be <relay_count)
+            chunks.append(buf)
 
         for club_squad_idx, squad in enumerate(chunks, start=1):
+            # Route by age-sum for Masters, by bracket label otherwise
+            age_sum = None
+            if ev.age_code == "MASTERS":
+                ages = [age_at(athletes[akey].birthdate)
+                         for akey, _ in squad[:relay_size]]
+                if any(a is None for a in ages):
+                    ins0 = athletes[squad[0][0]]
+                    issues.warn("masters_relay_no_dob",
+                        f"{clubs[cnorm]} Masters relay squad skipped — "
+                        f"at least one athlete has no birthdate "
+                        f"(first: {ins0.first} {ins0.last})")
+                    stats["masters_skipped_no_dob"] += 1
+                    continue
+                age_sum = sum(ages)
+            ag = pick_agegroup_for_relay(tevent, ev.age_code, age_sum)
+            if ag is None:
+                # Incomplete squads are already flagged by the
+                # `incomplete_relay` warning above; don't double-report.
+                if len(squad) >= relay_size:
+                    issues.warn("relay_unroutable",
+                        f"{clubs[cnorm]} relay UID {ev.uniqueid} "
+                        f"({ev.age_code}) couldn't find an AGEGROUP "
+                        f"(age_sum={age_sum})")
+                continue
+
             stable_key = (club_id, event_id, club_squad_idx)
             if stable_key in existing_relays_stable:
                 rid = existing_relays_stable[stable_key]
-                # Only add any relay positions that don't yet exist.
-                for leg_no, (akey, _bt) in enumerate(squad[:ev.relay_count],
+                for leg_no, (akey, _bt) in enumerate(squad[:relay_size],
                                                      start=1):
                     if (rid, leg_no) in existing_relay_pos:
                         continue
@@ -1649,25 +1606,24 @@ def main():
                     stats["relayposition_new"] += 1
                 continue
 
-            # New relay squad — allocate a fresh globally-unique TEAMNUMBER
             next_team_no += 1
             rid = db.next_id()
             entry_time = None
             if (all(bt is not None for _, bt in squad)
-                    and len(squad) >= ev.relay_count):
-                entry_time = sum(bt for _, bt in squad[:ev.relay_count])
+                    and len(squad) >= relay_size):
+                entry_time = sum(bt for _, bt in squad[:relay_size])
             db.insert("RELAY", {
                 "RELAYID":      rid,
                 "CLUBID":       club_id,
                 "SWIMEVENTID":  event_id,
-                "AGEGROUPID":   relay_ag,
+                "AGEGROUPID":   ag.agegroup_id,
                 "GENDER":       ev.gender,
-                "TEAMNUMBER":   next_team_no,       # globally unique
-                "RELAYCODE":    next_team_no,       # globally unique
-                "AGEMIN":       age_min,
-                "AGEMAX":       age_max,
-                "AGETOTAL":     0,
-                "ATHLETES":     ev.relay_count,
+                "TEAMNUMBER":   next_team_no,
+                "RELAYCODE":    next_team_no,
+                "AGEMIN":       ag.amin if ag.amin is not None else 0,
+                "AGEMAX":       ag.amax if ag.amax is not None else 99,
+                "AGETOTAL":     age_sum if age_sum is not None else 0,
+                "ATHLETES":     relay_size,
                 "ENTRYTIME":    entry_time,
                 "ENTRYCOURSE":  0,
                 "RESULTSTATUS": 0,
@@ -1677,9 +1633,7 @@ def main():
                 "FINALFIX":     "F",
                 "LATEENTRY":    "F",
                 "NOADVANCE":    "F",
-                "BACKUPTIME1":  0,
-                "BACKUPTIME2":  0,
-                "BACKUPTIME3":  0,
+                "BACKUPTIME1":  0, "BACKUPTIME2": 0, "BACKUPTIME3": 0,
                 "FINISHJUDGE":  0,
                 "PADTIME":      INT_MAX,
                 "QTCOURSE":     0,
@@ -1690,7 +1644,7 @@ def main():
             })
             stats["relay_new"] += 1
             existing_relays_stable[stable_key] = rid
-            for leg_no, (akey, _bt) in enumerate(squad[:ev.relay_count],
+            for leg_no, (akey, _bt) in enumerate(squad[:relay_size],
                                                  start=1):
                 db.insert("RELAYPOSITION", {
                     "RELAYID":      rid,
@@ -1706,112 +1660,28 @@ def main():
                 existing_relay_pos.add((rid, leg_no))
                 stats["relayposition_new"] += 1
 
-    # ----- COMBINEDEVENTS (Cumulatifs) -----
-    # On fresh load only — if the BSGLOBAL row already exists we leave it
-    # untouched, since the meet director may have tweaked the combined
-    # events manually in MM.
-    rows = db.query(
-        "SELECT DATA FROM BSGLOBAL WHERE NAME='COMBINEDEVENTS'")
-    if not rows:
-        # Build: age_code -> gender -> uniqueid -> SWIMEVENTID
-        # Lookup existing events via (SWIMSTYLEID, GENDER, AGEMIN, AGEMAX)
-        # matching the age bracket.
-        existing_events_by_sg_age: dict[tuple, int] = {}
-        for eid, styid, gen, amin, amax in db.query(
-            "SELECT e.SWIMEVENTID, e.SWIMSTYLEID, e.GENDER, "
-            "       a.AGEMIN, a.AGEMAX "
-            "FROM SWIMEVENT e LEFT JOIN AGEGROUP a "
-            "       ON a.SWIMEVENTID=e.SWIMEVENTID"):
-            if styid is None or gen is None:
-                continue
-            existing_events_by_sg_age[(int(styid), int(gen),
-                                        int(amin) if amin is not None else None,
-                                        int(amax) if amax is not None else None
-                                        )] = int(eid)
-        # Reverse-map SWIMSTYLEID -> UNIQUEID so we can resolve by UID
-        uid_to_sid: dict[int, int] = dict(style_ids)
-        # Build cumulatifs
-        ce_blocks: list[str] = []
-        ce_counter = 0
-        for (age_code, gender), (ce_name, uid_list) in CUMULATIFS.items():
-            amin, amax, _ = AGE_GROUPS[age_code]
-            event_ids_for_ce: list[int] = []
-            for uid in uid_list:
-                sid = uid_to_sid.get(uid)
-                if sid is None:
-                    continue
-                eid = existing_events_by_sg_age.get((sid, gender, amin, amax))
-                if eid is None:
-                    # Fall back: any event for this (style, gender), pick first
-                    for (s, g, _mn, _mx), e in existing_events_by_sg_age.items():
-                        if s == sid and g == gender:
-                            eid = e
-                            break
-                if eid is not None:
-                    event_ids_for_ce.append(eid)
-            if len(event_ids_for_ce) < 2:
-                # Not enough matching events to form a cumulatif; skip
-                continue
-            ce_counter += 1
-            ce_id = db.next_id()
-            anchor_eid = event_ids_for_ce[0]
-            events_xml = "\n        ".join(
-                f'<EVENT eventid="{e}" mandatory="F" />'
-                for e in event_ids_for_ce)
-            ce_blocks.append(
-                f'    <COMBINEDEVENT combinedeventid="{ce_id}" '
-                f'name="{ce_name}" titleforprints="{ce_name}" '
-                f'sumtype="2" '
-                f'pointsforplaces="{CUMULATIF_POINTS}" '
-                f'maxresults="100" sortbyresfirst="F" '
-                f'penalty="10" inpercent="T" completedsq="F" '
-                f'finalusetype="2" agegroupeventid="{anchor_eid}">\n'
-                f'      <EVENTS>\n'
-                f'        {events_xml}\n'
-                f'      </EVENTS>\n'
-                f'    </COMBINEDEVENT>')
-        if ce_blocks:
-            xml = (
-                '<?xml version="1.0" encoding="UTF-16"?>\r\n'
-                '<COMBINEDEVENTDEFINITION>\r\n'
-                '  <COMBINEDEVENTS>\r\n'
-                + "\r\n".join(ce_blocks) + "\r\n"
-                '  </COMBINEDEVENTS>\r\n'
-                '</COMBINEDEVENTDEFINITION>\r\n'
-            )
-            db.insert("BSGLOBAL", {
-                "NAME": "COMBINEDEVENTS",
-                "DATA": xml,
-            })
-            stats["combined_new"] = len(ce_blocks)
-
     # ----- Summary of changes -----
     print("\n" + "=" * 60)
     print("  Summary of changes")
     print("=" * 60)
-    def line(label, n, unit=""):
+    def line(label, n):
         if n:
-            print(f"  +{n:<5d} {label}{unit}")
-    if stats["style_new"]:      line("new SWIMSTYLE (catalog)", stats["style_new"])
-    if stats["session_new"]:    line("new SWIMSESSION",         stats["session_new"])
-    line("new clubs",                          stats["club_new"])
-    line("new athletes",                       stats["athlete_new"])
-    line("athlete gender corrections",         stats["athlete_gender_fix"])
-    line("athlete license fills",              stats["athlete_license_fix"])
-    line("athlete birthdate fills",            stats["athlete_birthdate_fix"])
-    line("athlete club changes",               stats["athlete_club_fix"])
-    line("new events",                         stats["event_new"])
-    line("new age-group rows",                 stats["agegroup_new"])
-    line("new individual entries",             stats["entry_new"])
-    line("entries updated (faster time)",      stats["entry_time_faster"])
-    line("new relay squads",                   stats["relay_new"])
-    line("new relay positions",                stats["relayposition_new"])
-    line("new combined events (cumulatifs)",   stats["combined_new"])
+            print(f"  +{n:<5d} {label}")
+    line("new clubs",                     stats["club_new"])
+    line("new athletes",                  stats["athlete_new"])
+    line("athlete gender corrections",    stats["athlete_gender_fix"])
+    line("athlete license fills",         stats["athlete_license_fix"])
+    line("athlete birthdate fills",       stats["athlete_birthdate_fix"])
+    line("athlete club changes",          stats["athlete_club_fix"])
+    line("new individual entries",        stats["entry_new"])
+    line("entries updated (faster time)", stats["entry_time_faster"])
+    line("new relay squads",              stats["relay_new"])
+    line("new relay positions",           stats["relayposition_new"])
+    line("Masters entries skipped (no DOB)", stats["masters_skipped_no_dob"])
     total_changes = sum(stats.values())
     if total_changes == 0:
         print("  (no changes — database already in sync with xlsx)")
     print("=" * 60)
-
     print(f"\nAllocated UIDs {db._start_uid+1}..{db._uid}  "
           f"({db._uid - db._start_uid} new rows)")
 

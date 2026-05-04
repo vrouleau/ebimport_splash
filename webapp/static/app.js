@@ -7,6 +7,8 @@
   const goBtn      = document.getElementById("go");
   const mdbOpts    = document.getElementById("mdb-opts");
   const results    = document.getElementById("results");
+  const fatalBlock = document.getElementById("fatal-block");
+  const fatalList  = document.getElementById("fatal-list");
   const sumBlock   = document.getElementById("summary-block");
   const sumList    = document.getElementById("summary-list");
   const issBlock   = document.getElementById("issues-block");
@@ -33,7 +35,8 @@
 
     // Reset
     results.hidden = true;
-    sumBlock.hidden = issBlock.hidden = dlBlock.hidden = rawBlock.hidden = true;
+    fatalBlock.hidden = sumBlock.hidden = issBlock.hidden = dlBlock.hidden = rawBlock.hidden = true;
+    fatalList.innerHTML = "";
     sumList.innerHTML = "";
     issList.innerHTML = "";
     rawOutput.textContent = "";
@@ -57,6 +60,19 @@
         : `Terminé avec code ${payload.returncode}.`;
 
       results.hidden = false;
+
+      // Fatal errors (rendered first, most prominent)
+      const fatals = payload.fatal || [];
+      if (fatals.length) {
+        fatalBlock.hidden = false;
+        for (const msg of fatals) {
+          const li = document.createElement("li");
+          li.textContent = msg;
+          fatalList.appendChild(li);
+        }
+        status.className = "status error";
+        status.textContent = `Importation annulée (${fatals.length} erreur${fatals.length>1?'s':''} fatale${fatals.length>1?'s':''}).`;
+      }
 
       // Summary
       if (payload.summary && payload.summary.length) {
@@ -106,6 +122,8 @@
       }
 
       // Download
+      // Download — the zip contains the generated file and/or the
+      // issues report.  Even on a fatal we still offer the report.
       if (payload.download_id) {
         dlBlock.hidden = false;
         const url = `/api/download/${payload.download_id}` +

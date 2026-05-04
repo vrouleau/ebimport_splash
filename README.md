@@ -1,7 +1,8 @@
 # ebimport_splash
 
-Convert an Eventbrite/registration Excel workbook into a **SPLASH Meet
-Manager 11** meet. Two independent scripts are provided:
+Convert an Eventbrite/registration Excel workbook into inscriptions
+loaded against an existing **SPLASH Meet Manager 11** meet database.
+Two scripts are provided:
 
 - **`load_to_mdb.py`** — writes directly into a SPLASH `.mdb` file
   (via Jackcess/UCanAccess over JDBC). Idempotent / re-runnable.
@@ -10,19 +11,48 @@ Manager 11** meet. Two independent scripts are provided:
   Lenex-compatible tool.
 
 Both scripts read the **`Attendees`** sheet of a registration workbook
-(one row per athlete × ticket/event) and produce a meet populated with:
+(one row per athlete × ticket/event).
 
-- clubs, athletes
-- one `SWIMEVENT` per (age bracket × gender × style) with its `AGEGROUP`
-- individual entries (`SWIMRESULT` rows) with entry time in
-  milliseconds
-- relay squads (`RELAY` + `RELAYPOSITION`), chunked 4 members at a time
-- `SWIMSTYLE` rows following the **Société de Sauvetage** lifesaving
-  catalog (`STROKE=0`, `TECHNIQUE=0`, `UNIQUEID` 501–552, French names)
-- combined events (Cumulatifs) written to
-  `BSGLOBAL.COMBINEDEVENTS` with the federation's
-  `pointsforplaces="20,18,16,14,13,12,11,10,8,7,6,5,4,3,2,1"`
-  point schedule (MDB only)
+## How the MDB loader works
+
+The supplied `.mdb` is the **authoritative event template**.  The meet
+organiser has set up the event structure in SPLASH (styles, events,
+age groups, sessions, combined events) ahead of time; the loader
+treats that structure as read-only and only populates:
+
+- **CLUB** rows — one per distinct club in the xlsx
+- **ATHLETE** rows — one per distinct (first name, last name, NRAN)
+- **SWIMRESULT** rows — one individual entry per (athlete, event),
+  with entry time in milliseconds
+- **RELAY** + **RELAYPOSITION** rows — relay squads for mixed-gender
+  relay events, routed by template age bracket (or by age-sum for
+  Masters relays)
+
+The loader **never** creates SWIMSTYLE, SWIMEVENT, AGEGROUP,
+SWIMSESSION, or COMBINEDEVENTS rows.  If a ticket in the xlsx doesn't
+resolve to an existing (UNIQUEID, gender, age-bracket) combination in
+the template, it's reported as a **fatal error** and the import is
+aborted with no writes performed — fix the xlsx (or add the missing
+event in SPLASH) and re-run.
+
+**First run vs. re-run** is auto-detected: if the supplied `.mdb`
+contains zero SWIMRESULT/RELAY rows it's considered a first run,
+otherwise additive mode kicks in.  On a re-run, only missing rows are
+inserted; `ENTRYTIME` is updated only when a faster time is supplied
+(never regresses).
+
+## Age-bracket routing
+
+| xlsx age prefix | Routed to AGEGROUP |
+|---|---|
+| `15-18` | the bracket `[15, 18]` on the matched SWIMEVENT |
+| `Open`  | the bracket `[19, 99]` on the matched SWIMEVENT |
+| `MA` (individual) | the 5-year Masters bracket containing the athlete's age at `AGE_DATE` |
+| `MA Relais Mixte` | the age-sum Masters bracket containing the squad's total age |
+
+If a Masters athlete has no birthdate, their individual entry is
+warned and skipped.  A Masters relay squad where any member lacks a
+DOB is skipped entirely.
 
 ---
 
@@ -129,35 +159,30 @@ incomplete relays, …).
 
 ---
 
-## Editing event definitions
+## Editing the ticket → UNIQUEID map
 
-All lifesaving events live in the `LIFESAVING_CATALOG` dict near the
-top of each script. Event structure follows this identity:
+The `TICKET_UID` dict near the top of `load_to_mdb.py` maps the xlsx
+ticket label + (is_relay, is_masters_obstacle) to the SWIMSTYLE
+UNIQUEID expected in the template.  The values below match the
+**Championnats canadiens 2026** template:
 
-```
-(age bracket, gender, catalog UID) -> SWIMEVENT + AGEGROUP
-```
+| Ticket label | UNIQUEID | Template event name |
+|---|---|---|
+| Corde              | 504 | 12 m Lancer de la corde / Line Throw |
+| Obstacle (15-18/Open) | 501 | 200 m Nage avec obstacles / Obstacle Swim |
+| Obstacle 100 m (Masters) | 541 | 100 m Nage avec obstacles / Obstacle Swim |
+| Portage (100 m)    | 502 | 100 m Portage Mannequin palmes |
+| Portage 50 m       | 507 | 50 m Portage du mannequin plein |
+| Remorquage         | 506 | 100 m Remorquage mannequin palmes |
+| Sauveteur d'acier  | 508 | 200 m Sauveteur d'acier / Super Lifesaver |
+| Medley             | 531 | 100 m Sauvetage combiné / Rescue Medley |
+| Relais Medley      | 544 | 4 × 50 m Relais mixte sauve combiné |
+| Relais Obstacle    | 542 | 4 × 50 m Relais obstacle mixte |
+| Relais Portage     | 543 | 2 × 50 m Relais mixte portage |
 
-The Société-de-Sauvetage catalog UIDs used (matches the
-`30-Deux 25 octobre 2025.mdb` reference):
-
-| UID | Event |
-|---|---|
-| 501 | 200 m Nage avec obstacles |
-| 502 | 100 m Portage Mannequin plein avec palmes |
-| 504 | 12 m Lancer de la corde |
-| 506 | 100 m Remorquage du mannequin ½ plein + palmes |
-| 507 | 50 m Portage du mannequin plein |
-| 508 | 200 m Sauveteur d'acier |
-| 538 | 4 × 50 m Relais Medley |
-| 540 | 4 × 50 m Relais obstacles |
-| 550 | 200 m Medley de sauvetage *(added for Canadien)* |
-| 551 | 4 × 50 m Relais portage du mannequin *(added)* |
-| 552 | 100 m Nage avec obstacles (Masters) *(added)* |
-
-Cumulatifs are configured via the `CUMULATIFS` dict — one entry per
-(age × gender), each listing the UIDs that contribute to the
-cumulative score.
+Editing this dict is enough to adapt the loader to a different season
+or federation — the matching SWIMSTYLE UIDs in the template `.mdb`
+are the authority.
 
 ---
 

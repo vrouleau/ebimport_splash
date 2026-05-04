@@ -34,8 +34,8 @@
         </label>
         <label>
           <input type="radio" name="mode" value="mdb">
-          <strong>Générer un <code>.mdb</code></strong>
-          — produit une base SPLASH Meet Manager 11 prête à ouvrir.
+          <strong>Charger dans un <code>.mdb</code></strong>
+          — ajoute les inscriptions dans la base SPLASH fournie.
         </label>
         <label>
           <input type="radio" name="mode" value="lenex">
@@ -45,15 +45,20 @@
       </fieldset>
 
       <fieldset id="mdb-opts">
-        <legend>Options pour le <code>.mdb</code></legend>
+        <legend>Fichier <code>.mdb</code> SPLASH <span class="req">*</span></legend>
         <label>
-          Base <code>.mdb</code> existante (optionnel) :
+          Base <code>.mdb</code> (modèle ou en cours de remplissage) :
           <input type="file" name="mdb" accept=".mdb">
         </label>
         <p class="hint">
-          Si laissé vide, un modèle SPLASH vierge est utilisé.
-          Si fourni, le loader ajoute les nouvelles données sans écraser
-          les structures déjà en place (clubs, athlètes, épreuves, horaire).
+          <strong>Requis pour les modes <em>Validation</em> et
+          <em>Charger dans un .mdb</em>.</strong>
+          La structure des épreuves (styles, événements, groupes d'âge,
+          sessions) est prise telle quelle depuis ce fichier — le
+          chargeur n'ajoute que les clubs, athlètes et inscriptions.
+          Si aucune inscription n'est présente dans le <code>.mdb</code>,
+          c'est considéré comme un premier chargement ; sinon, c'est une
+          mise à jour additive.
         </p>
       </fieldset>
 
@@ -65,6 +70,17 @@
 
     <section id="results" hidden>
       <h2>Résultats</h2>
+
+      <section id="fatal-block" hidden>
+        <h3 class="fatal-h">⚠ Erreurs fatales — importation annulée</h3>
+        <p class="hint">
+          Un ou plusieurs billets du fichier Excel n'ont pas d'équivalent
+          dans le modèle <code>.mdb</code>.  Le chargeur s'arrête sans
+          rien écrire — corrigez le fichier Excel ou ajoutez les épreuves
+          manquantes dans SPLASH, puis relancez.
+        </p>
+        <ul id="fatal-list"></ul>
+      </section>
 
       <section id="summary-block" hidden>
         <h3>Sommaire</h3>

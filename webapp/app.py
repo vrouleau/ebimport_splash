@@ -35,7 +35,6 @@ APP_DIR     = Path(__file__).parent.resolve()
 REPO_ROOT   = APP_DIR.parent
 MDB_LOADER  = REPO_ROOT / "load_to_mdb.py"
 LNX_LOADER  = REPO_ROOT / "load_to_lenex.py"
-EMPTY_MDB   = APP_DIR / "templates_mdb" / "empty_splash_meet.mdb"
 
 STAGING_DIR = Path(os.environ.get("STAGING_DIR", "/tmp/ebimport_staging"))
 STAGING_DIR.mkdir(parents=True, exist_ok=True)
@@ -172,11 +171,13 @@ def parse_loader_output(text: str) -> dict:
 def run_loader(mode: str,
                xlsx_path: Path,
                staging: Staging,
-               user_mdb: Path | None = None) -> dict:
+               user_mdb: Path) -> dict:
     """Run the appropriate loader and return parsed output plus the
-    generated result file (or None if dry-run).
+    generated result file (or None if validation-only / fatal).
 
     mode: 'dry-run' | 'mdb' | 'lenex'
+    user_mdb must always be provided — it supplies the meet's event
+    structure, which the loader treats as authoritative.
     """
     env = os.environ.copy()
     env.setdefault("UCANACCESS_DIR", str(REPO_ROOT / "vendor" / "ucanaccess"))
@@ -184,10 +185,11 @@ def run_loader(mode: str,
     result_file: Path | None = None
 
     if mode in ("dry-run", "mdb"):
-        # Copy the MDB template (or user-supplied) into the staging dir
-        src_mdb = user_mdb if user_mdb else EMPTY_MDB
+        # Copy the user-supplied MDB into the staging dir so we can
+        # return the modified copy as the download.  The supplied
+        # .mdb is always authoritative — we never use a built-in one.
         out_mdb = staging.dir / "meet.mdb"
-        shutil.copy(src_mdb, out_mdb)
+        shutil.copy(user_mdb, out_mdb)
         cmd = [sys.executable, str(MDB_LOADER),
                "--xlsx", str(xlsx_path),
                "--mdb", str(out_mdb)]
@@ -214,8 +216,12 @@ def run_loader(mode: str,
     parsed["returncode"] = completed.returncode
     parsed["raw_output"] = combined
 
-    # Bundle the result file + an issues.txt into a zip, so the user
-    # gets a self-describing archive.
+    # If the loader aborted with a FATAL (exit 2), parse the list of
+    # fatal errors out of the combined output so the UI can highlight
+    # them prominently.  No result file is produced.
+    parsed["fatal"] = _parse_fatals(combined) if completed.returncode == 2 else []
+
+    # Bundle the result file + an issues.txt into a zip
     issues_txt = _render_issues_text(parsed, xlsx_path.name)
     zip_path = staging.result_zip
     with zipfile.ZipFile(zip_path, "w",
@@ -228,6 +234,26 @@ def run_loader(mode: str,
     parsed["download_id"]   = staging.id
     return parsed
 
+
+def _parse_fatals(text: str) -> list[str]:
+    """Pull the bullet list out of a FATAL: block in loader stdout."""
+    out: list[str] = []
+    in_fatal = False
+    for line in text.splitlines():
+        if "FATAL" in line and "template/xlsx" in line:
+            in_fatal = True
+            continue
+        if in_fatal:
+            if _BAR.match(line):
+                # consecutive === lines are fine; end when we hit a non-bar,
+                # non-bullet line
+                continue
+            m = re.match(r"^\s*-\s+(.*?)$", line)
+            if m:
+                out.append(m.group(1).rstrip())
+            elif line.strip().startswith("fatal error"):
+                break
+    return out
 
 def _render_issues_text(parsed: dict, xlsx_name: str) -> str:
     """Plain-text issues report for inclusion in the zip."""
@@ -279,7 +305,15 @@ def api_run():
     if xlsx is None or not xlsx.filename:
         return jsonify({"error": "Aucun fichier xlsx reçu."}), 400
 
+    # Lenex mode doesn't need an MDB; the other two modes require one.
     mdb_upload = request.files.get("mdb")
+    if mode in ("dry-run", "mdb"):
+        if mdb_upload is None or not mdb_upload.filename:
+            return jsonify({
+                "error": "Un fichier .mdb modèle est requis pour "
+                         "ce mode (la structure des épreuves y est "
+                         "prise telle quelle)."}), 400
+
     staging = _new_staging()
     try:
         xlsx_path = staging.dir / "input.xlsx"

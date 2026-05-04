@@ -133,3 +133,19 @@ footer { margin-top: 3rem; color: var(--fg-mut); text-align: center; }
 footer a { color: var(--fg-mut); }
 
 .error { color: var(--warn); font-weight: 600; }
+
+.req { color: var(--warn); font-weight: bold; }
+
+#fatal-block {
+  background: #fff0ed;
+  border: 2px solid var(--warn);
+  border-radius: 4px;
+  padding: 0.8rem 1.2rem;
+  margin: 1rem 0;
+}
+#fatal-block .fatal-h { margin: 0 0 0.4rem; color: var(--warn); }
+#fatal-block ul { margin: 0.3rem 0 0; padding-left: 1.4em; }
+#fatal-block li {
+  margin: 0.2rem 0;
+  font-family: var(--mono);
+}
