@@ -15,7 +15,7 @@ Both scripts read the **`Attendees`** sheet of a registration workbook
 - clubs, athletes
 - one `SWIMEVENT` per (age bracket × gender × style) with its `AGEGROUP`
 - individual entries (`SWIMRESULT` rows) with entry time in
-  hundredths of a second
+  milliseconds
 - relay squads (`RELAY` + `RELAYPOSITION`), chunked 4 members at a time
 - `SWIMSTYLE` rows following the **Société de Sauvetage** lifesaving
   catalog (`STROKE=0`, `TECHNIQUE=0`, `UNIQUEID` 501–552, French names)
@@ -26,7 +26,16 @@ Both scripts read the **`Attendees`** sheet of a registration workbook
 
 ---
 
-## Requirements
+## Running the web UI (recommended)
+
+The supported way to run this is as a Docker container, which bundles
+everything (Python runtime, Java, UCanAccess, the loaders, the baked-in
+empty SPLASH template) into a single image.  See the
+[Web UI (Docker)](#web-ui-docker) section near the bottom.
+
+## Running from source (development)
+
+If you want to hack on the loaders directly:
 
 ### Python
 
@@ -38,7 +47,7 @@ Python 3.10+ with:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install openpyxl jaydebeapi
+pip install openpyxl jaydebeapi JPype1
 ```
 
 ### UCanAccess (MDB script only)
@@ -47,11 +56,16 @@ The MDB writer speaks to Access via **UCanAccess** over JDBC. Download
 the bundle and unpack it somewhere, e.g.:
 
 ```bash
-wget -O /tmp/ucanaccess.zip \
-  "https://sourceforge.net/projects/ucanaccess/files/latest/download"
+curl -sSL -A 'Mozilla/5.0' \
+    -o /tmp/ucanaccess.zip \
+    'https://downloads.sourceforge.net/project/ucanaccess/UCanAccess-5.0.1.bin.zip'
 unzip /tmp/ucanaccess.zip -d /tmp/ucanaccess
 export UCANACCESS_DIR=/tmp/ucanaccess/UCanAccess-5.0.1.bin
 ```
+
+(SourceForge serves an HTML interstitial that needs the `-A` header
+to be bypassed; if the command above still returns HTML, follow the
+meta-refresh URL manually.)
 
 Requires Java 8+ on the `PATH`.
 
@@ -176,8 +190,8 @@ xlsx row number.
   don't break.
 - All generated events default to a single **placeholder session**
   you rename/split in SPLASH afterwards.
-- Best times are stored in hundredths of a second
-  (`ENTRYTIME` = total cs). Parser accepts `mm:ss.cc`, `hh:mm:ss.cc`,
+- Best times are stored in **milliseconds**
+  (`ENTRYTIME` = total ms). Parser accepts `mm:ss.cc`, `hh:mm:ss.cc`,
   `ss.cc`, as well as Excel time/timedelta cell types.
 - Lifesaving strokes require `STROKE=0`, `TECHNIQUE=0`
   (federation catalog). Other values crash SPLASH's result module

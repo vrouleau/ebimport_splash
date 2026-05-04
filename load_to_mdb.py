@@ -793,9 +793,9 @@ class MDB:
         jars = (
             glob.glob(os.path.join(UCANACCESS_DIR, "ucanaccess-*.jar"))
             + glob.glob(os.path.join(UCANACCESS_DIR, "lib", "*.jar"))
-            # Support the flattened layout used by the self-contained
-            # distribution tarball, where all five jars live directly
-            # under vendor/ucanaccess/ with no lib/ subdir.
+            # Support the flattened layout used by the Docker image,
+            # where all five jars live directly under /opt/ucanaccess/
+            # with no lib/ subdir.
             + glob.glob(os.path.join(UCANACCESS_DIR, "*.jar"))
         )
         # Dedup while preserving order
