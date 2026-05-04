@@ -1566,6 +1566,30 @@ def main():
     db.insert_many("SWIMRESULT", sr_batch)
 
     # ----- RELAY + RELAYPOSITION -----
+    # Global TEAMNUMBER / RELAYCODE counter — both must be unique across
+    # ALL relays in the meet (not just per club).  SPLASH's seeding module
+    # crashes (TBSItem.DoLoadColumns) when two relays in the same event
+    # share a TEAMNUMBER/RELAYCODE.  We keep a per-club squad index only
+    # for the display name.
+    rows = db.query("SELECT COALESCE(MAX(TEAMNUMBER), 0) FROM RELAY")
+    next_team_no = int(rows[0][0]) if rows and rows[0][0] is not None else 0
+
+    # Also remember which (club, event, squad-index-within-club) we've seen
+    # — that's the *stable* identity across re-runs (TEAMNUMBER isn't,
+    # because the global counter shifts if rows were inserted/deleted).
+    existing_relays_stable: dict[tuple, int] = {}
+    # Build it from the current DB state
+    _club_squad_count: dict[tuple, int] = defaultdict(int)
+    for rid_row, club_row, event_row, _tn in db.query(
+        "SELECT RELAYID, CLUBID, SWIMEVENTID, TEAMNUMBER "
+        "FROM RELAY ORDER BY RELAYID"):
+        if club_row is None or event_row is None:
+            continue
+        key_ce = (int(club_row), int(event_row))
+        _club_squad_count[key_ce] += 1
+        sub_idx = _club_squad_count[key_ce]
+        existing_relays_stable[(int(club_row), int(event_row), sub_idx)] = int(rid_row)
+
     for (cnorm, ekey), members in relay_groups.items():
         ev = events[ekey]
         age_min, age_max, _age_name = AGE_GROUPS[ev.age_code]
@@ -1586,10 +1610,10 @@ def main():
         if buf:
             chunks.append(buf)    # leftover squad (may be <relay_count)
 
-        for team_no, squad in enumerate(chunks, start=1):
-            relay_key = (club_id, event_id, team_no)
-            if relay_key in existing_relays:
-                rid = existing_relays[relay_key]
+        for club_squad_idx, squad in enumerate(chunks, start=1):
+            stable_key = (club_id, event_id, club_squad_idx)
+            if stable_key in existing_relays_stable:
+                rid = existing_relays_stable[stable_key]
                 # Only add any relay positions that don't yet exist.
                 for leg_no, (akey, _bt) in enumerate(squad[:ev.relay_count],
                                                      start=1):
@@ -1610,7 +1634,8 @@ def main():
                     stats["relayposition_new"] += 1
                 continue
 
-            # New relay squad
+            # New relay squad — allocate a fresh globally-unique TEAMNUMBER
+            next_team_no += 1
             rid = db.next_id()
             entry_time = None
             if (all(bt is not None for _, bt in squad)
@@ -1622,8 +1647,8 @@ def main():
                 "SWIMEVENTID":  event_id,
                 "AGEGROUPID":   relay_ag,
                 "GENDER":       ev.gender,
-                "TEAMNUMBER":   team_no,
-                "RELAYCODE":    team_no,
+                "TEAMNUMBER":   next_team_no,       # globally unique
+                "RELAYCODE":    next_team_no,       # globally unique
                 "AGEMIN":       age_min,
                 "AGEMAX":       age_max,
                 "AGETOTAL":     0,
@@ -1631,7 +1656,7 @@ def main():
                 "ENTRYTIME":    entry_time,
                 "ENTRYCOURSE":  0,
                 "RESULTSTATUS": 0,
-                "NAME":         truncate(f"{clubs[cnorm]} {team_no}", 100),
+                "NAME":         truncate(f"{clubs[cnorm]} {club_squad_idx}", 100),
                 "BONUSENTRY":   "F",
                 "DSQNOTIFIED":  "F",
                 "FINALFIX":     "F",
@@ -1649,7 +1674,7 @@ def main():
                 "USETIMETYPE":  0,
             })
             stats["relay_new"] += 1
-            existing_relays[relay_key] = rid
+            existing_relays_stable[stable_key] = rid
             for leg_no, (akey, _bt) in enumerate(squad[:ev.relay_count],
                                                  start=1):
                 db.insert("RELAYPOSITION", {
