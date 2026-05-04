@@ -262,6 +262,142 @@ def short_code(name: str, length: int = 10) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Fuzzy duplicate detection (mirrors load_to_mdb.py)
+# --------------------------------------------------------------------------- #
+import difflib as _difflib
+FUZZY_CLUB_THRESHOLD    = 0.90
+FUZZY_ATHLETE_THRESHOLD = 0.90
+
+
+def fuzzy_key(s: str) -> str:
+    if s is None: return ""
+    s = unicodedata.normalize("NFKD", str(s))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.lower()
+    s = re.sub(r"[^\w\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def similarity(a: str, b: str) -> float:
+    return _difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def find_fuzzy_club_duplicates(
+        club_counts: dict[str, int],
+        threshold: float = FUZZY_CLUB_THRESHOLD):
+    names = sorted(club_counts.keys(), key=str.lower)
+    out = []
+    for i in range(len(names)):
+        a = names[i]; ka = fuzzy_key(a)
+        for j in range(i + 1, len(names)):
+            b = names[j]; kb = fuzzy_key(b)
+            if not ka or not kb:
+                continue
+            if ka == kb:
+                out.append((a, b, 1.0, club_counts[a], club_counts[b]))
+                continue
+            if abs(len(ka) - len(kb)) > max(4, min(len(ka), len(kb)) // 2):
+                continue
+            s = similarity(ka, kb)
+            if s >= threshold:
+                out.append((a, b, s, club_counts[a], club_counts[b]))
+    return out
+
+
+def find_fuzzy_athlete_duplicates(
+        inscriptions: list["Inscription"],
+        threshold: float = FUZZY_ATHLETE_THRESHOLD):
+    # Dedup inscriptions down to athletes (first+last+license) with the
+    # first seen entry as representative.
+    athletes: dict[tuple, "Inscription"] = {}
+    for ins in inscriptions:
+        k = (norm_key(ins.first, ins.last), (ins.license or "").strip())
+        athletes.setdefault(k, ins)
+
+    results = {
+        "same_license":           [],
+        "same_club_fuzzy":        [],
+        "cross_club_same_person": [],
+    }
+
+    # 1) same license, different name
+    by_license: dict[str, list] = {}
+    for k, ins in athletes.items():
+        lic = (ins.license or "").strip()
+        if lic:
+            by_license.setdefault(lic, []).append(ins)
+    for lic, group in by_license.items():
+        if len(group) < 2: continue
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a, b = group[i], group[j]
+                if fuzzy_key(f"{a.first} {a.last}") \
+                        != fuzzy_key(f"{b.first} {b.last}"):
+                    results["same_license"].append(
+                        (f"{a.first} {a.last}", a.club,
+                         f"{b.first} {b.last}", b.club, lic))
+
+    # 2) same club, similar names
+    by_club: dict[str, list] = {}
+    for k, ins in athletes.items():
+        by_club.setdefault(norm_key(ins.club), []).append(ins)
+    for cnorm, group in by_club.items():
+        if len(group) < 2: continue
+        keys = [fuzzy_key(f"{ins.first} {ins.last}") for ins in group]
+        for i in range(len(group)):
+            ka = keys[i]
+            if not ka: continue
+            for j in range(i + 1, len(group)):
+                kb = keys[j]
+                if not kb: continue
+                if ka == kb:
+                    a, b = group[i], group[j]
+                    if a.license != b.license:
+                        results["same_club_fuzzy"].append(
+                            (f"{a.first} {a.last}", a.license or "-",
+                             f"{b.first} {b.last}", b.license or "-",
+                             a.club, 1.0))
+                    continue
+                if abs(len(ka) - len(kb)) > max(4, min(len(ka), len(kb)) // 2):
+                    continue
+                s = similarity(ka, kb)
+                if s >= threshold:
+                    a, b = group[i], group[j]
+                    s_first = similarity(fuzzy_key(a.first), fuzzy_key(b.first))
+                    s_last  = similarity(fuzzy_key(a.last),  fuzzy_key(b.last))
+                    if s_first >= 0.70 and s_last >= 0.70:
+                        results["same_club_fuzzy"].append(
+                            (f"{a.first} {a.last}", a.license or "-",
+                             f"{b.first} {b.last}", b.license or "-",
+                             a.club, s))
+
+    # 3) cross-club same person: same normalised name + same DOB
+    by_name_dob: dict[tuple, list] = {}
+    for k, ins in athletes.items():
+        bd = ins.birthdate
+        if bd is None:
+            continue
+        fk = fuzzy_key(f"{ins.first} {ins.last}")
+        if not fk:
+            continue
+        by_name_dob.setdefault((fk, bd), []).append(ins)
+    for (name_k, bd_k), group in by_name_dob.items():
+        clubs_ = {norm_key(ins.club) for ins in group}
+        if len(clubs_) < 2: continue
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a, b = group[i], group[j]
+                if norm_key(a.club) == norm_key(b.club):
+                    continue
+                results["cross_club_same_person"].append(
+                    (f"{a.first} {a.last}", a.club, b.club,
+                     bd_k.isoformat() if bd_k else ""))
+
+    return results
+
+
+# --------------------------------------------------------------------------- #
 # Read workbook
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -607,10 +743,7 @@ def build_lenex(inscriptions: list[Inscription]) -> ET.ElementTree:
                     if len(buf) == ev.relay_count:
                         chunks.append(buf); buf = []
                 if buf:
-                    if chunks:
-                        chunks[-1].extend(buf)
-                    else:
-                        chunks.append(buf)
+                    chunks.append(buf)   # leftover squad (may be incomplete)
                 for team_no, squad in enumerate(chunks, start=1):
                     relay_uid += 1
                     entry_cs = None
@@ -725,10 +858,12 @@ def main():
                 f"{club_disp}: {len(members)}/{ev.relay_count} athletes "
                 f"for {ev.name_fr} ({ev.age_code})")
         elif leftovers:
+            n_squads = (len(members) + ev.relay_count - 1) // ev.relay_count
             issues.note(
                 "extra_relay_members",
                 f"{club_disp}: {len(members)} athletes for {ev.name_fr} "
-                f"({ev.age_code}) — {leftovers} extra")
+                f"({ev.age_code}) — split into {n_squads} squads, the "
+                f"last one has only {leftovers}/{ev.relay_count}")
 
     # Non-race-only clubs / athletes (informational)
     wb_all = openpyxl.load_workbook(args.xlsx, data_only=True)
@@ -740,23 +875,48 @@ def main():
     i_cl = hdr.index("Club")
     i_lc = hdr.index("NRAN")
     all_clubs: set[str] = set()
-    all_athletes: set[tuple] = set()
+    all_names: set[str] = set()
     for r in rows_all[1:]:
         if not r or not r[i_f] or not r[i_l]:
             continue
         all_clubs.add(norm_key(r[i_cl] or "Unattached"))
-        all_athletes.add((norm_key(r[i_f], r[i_l]),
-                          str(r[i_lc]).strip() if r[i_lc] else ""))
+        all_names.add(norm_key(r[i_f], r[i_l]))
+    race_names = {akey[0] for akey in athletes}
     n_club_skipped = len(all_clubs - clubs)
-    n_ath_skipped = len(all_athletes - athletes)
+    n_ath_skipped = len(all_names - race_names)
     if n_club_skipped:
         issues.note("non_race_only_club",
                     f"{n_club_skipped} club(s) appear only on non-race "
                     f"tickets (Banquet/Coach/Officiel/…) — not imported")
     if n_ath_skipped:
         issues.note("non_race_only_athlete",
-                    f"{n_ath_skipped} athlete(s) appear only on non-race "
-                    f"tickets — not imported")
+                    f"{n_ath_skipped} attendee(s) only bought non-race "
+                    f"tickets (supporters, coaches, officials, hotel) "
+                    f"— not imported as athletes")
+
+    # ----- Fuzzy duplicate detection -----
+    from collections import Counter as _Counter
+    club_row_counts: dict[str, int] = _Counter()
+    for i in ins:
+        club_row_counts[i.club] += 1
+    for a, b, sim, ca, cb in find_fuzzy_club_duplicates(dict(club_row_counts)):
+        issues.warn("possible_duplicate_club",
+                    f"{a!r} ({ca} rows) vs {b!r} ({cb} rows) "
+                    f"— similarity {sim:.2f}")
+    fuzzy = find_fuzzy_athlete_duplicates(ins)
+    for (name_a, club_a, name_b, club_b, lic) in fuzzy["same_license"]:
+        issues.warn("license_name_mismatch",
+                    f"license {lic!r}: {name_a!r} ({club_a}) vs "
+                    f"{name_b!r} ({club_b}) — same license, different "
+                    f"name spelling")
+    for (name_a, lic_a, name_b, lic_b, club, sim) in fuzzy["same_club_fuzzy"]:
+        issues.warn("possible_duplicate_athlete",
+                    f"{club}: {name_a!r} (NRAN {lic_a}) vs {name_b!r} "
+                    f"(NRAN {lic_b}) — similarity {sim:.2f}")
+    for (name, club_a, club_b, dob) in fuzzy["cross_club_same_person"]:
+        issues.warn("same_person_different_club",
+                    f"{name!r} born {dob} appears in both {club_a!r} "
+                    f"and {club_b!r} — probably the same person")
 
     tree = build_lenex(ins)
 

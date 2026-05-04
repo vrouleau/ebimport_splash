@@ -316,6 +316,178 @@ def short_code_from_name(name: str, length: int = 10) -> str:
     return cleaned[:length].upper() or "CLUB"
 
 
+# --------------------------------------------------------------------------- #
+# Fuzzy duplicate detection helpers
+# --------------------------------------------------------------------------- #
+import difflib as _difflib
+
+FUZZY_CLUB_THRESHOLD    = 0.90   # club name similarity
+FUZZY_ATHLETE_THRESHOLD = 0.90   # same-club athlete full-name similarity
+
+
+def fuzzy_key(s: str) -> str:
+    """Strong normalisation for dedup: lowercase, NFKD, strip accents and
+    punctuation, collapse whitespace.  Two strings with the same
+    fuzzy_key are almost certainly the same entity."""
+    if s is None:
+        return ""
+    s = unicodedata.normalize("NFKD", str(s))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.lower()
+    s = re.sub(r"[^\w\s]", " ", s)     # drop punctuation
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def similarity(a: str, b: str) -> float:
+    """Ratio in [0, 1].  1.0 = identical, 0.0 = unrelated."""
+    return _difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def find_fuzzy_club_duplicates(
+        club_counts: dict[str, int],
+        threshold: float = FUZZY_CLUB_THRESHOLD) -> list[tuple[str, str, float, int, int]]:
+    """Return list of (name_a, name_b, similarity, count_a, count_b) for
+    club-name pairs that look like typos/variants of each other.
+
+    Pairs are reported when either:
+      - their fuzzy_key is identical (e.g. 'Rouville SurfClub' / 'Rouville Surfclub'), or
+      - their similarity on normalised text is >= threshold.
+    """
+    names = sorted(club_counts.keys(), key=str.lower)
+    out: list[tuple[str, str, float, int, int]] = []
+    for i in range(len(names)):
+        a = names[i]
+        ka = fuzzy_key(a)
+        for j in range(i + 1, len(names)):
+            b = names[j]
+            kb = fuzzy_key(b)
+            if not ka or not kb:
+                continue
+            if ka == kb:
+                out.append((a, b, 1.0, club_counts[a], club_counts[b]))
+                continue
+            # Skip comparisons with wildly different lengths — saves time and
+            # avoids false positives on very short names.
+            if abs(len(ka) - len(kb)) > max(4, min(len(ka), len(kb)) // 2):
+                continue
+            s = similarity(ka, kb)
+            if s >= threshold:
+                out.append((a, b, s, club_counts[a], club_counts[b]))
+    return out
+
+
+def find_fuzzy_athlete_duplicates(
+        athletes: dict[tuple, "Inscription"],
+        threshold: float = FUZZY_ATHLETE_THRESHOLD
+) -> dict[str, list[tuple]]:
+    """Scan the athletes dict for suspect duplicates.
+
+    Returns a dict with three keys:
+        'same_license':          pairs sharing a LICENSE but with different names
+        'same_club_fuzzy':       pairs in the same club whose full name is similar
+        'cross_club_same_person':pairs in different clubs with same normalised
+                                 first+last name AND same birthdate
+    """
+    results = {
+        "same_license":           [],
+        "same_club_fuzzy":        [],
+        "cross_club_same_person": [],
+    }
+
+    # Index athletes by license
+    by_license: dict[str, list[tuple[tuple, "Inscription"]]] = {}
+    for akey, ins in athletes.items():
+        lic = (ins.license or "").strip()
+        if lic:
+            by_license.setdefault(lic, []).append((akey, ins))
+
+    # 1) same license, different name
+    for lic, group in by_license.items():
+        if len(group) < 2:
+            continue
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a_key, a = group[i]
+                b_key, b = group[j]
+                name_a = f"{a.first} {a.last}"
+                name_b = f"{b.first} {b.last}"
+                if fuzzy_key(name_a) != fuzzy_key(name_b):
+                    results["same_license"].append(
+                        (name_a, a.club, name_b, b.club, lic))
+
+    # Group athletes by club for same-club fuzzy check
+    by_club: dict[str, list[tuple[tuple, "Inscription"]]] = {}
+    for akey, ins in athletes.items():
+        by_club.setdefault(norm_key(ins.club), []).append((akey, ins))
+
+    # 2) same club, similar full names
+    for cnorm, group in by_club.items():
+        n = len(group)
+        if n < 2:
+            continue
+        keys = [fuzzy_key(f"{ins.first} {ins.last}") for _, ins in group]
+        for i in range(n):
+            ka = keys[i]
+            if not ka:
+                continue
+            for j in range(i + 1, n):
+                kb = keys[j]
+                if not kb or ka == kb:
+                    # Exact match after normalisation — same person twice.
+                    # (Usually caught upstream by the dedup key, but guard
+                    # for cases where license differs so the dedup key
+                    # doesn't coalesce them.)
+                    if ka == kb:
+                        a_key, a = group[i]; b_key, b = group[j]
+                        if a.license != b.license:
+                            results["same_club_fuzzy"].append(
+                                (f"{a.first} {a.last}", a.license or "-",
+                                 f"{b.first} {b.last}", b.license or "-",
+                                 a.club, 1.0))
+                    continue
+                if abs(len(ka) - len(kb)) > max(4, min(len(ka), len(kb)) // 2):
+                    continue
+                s = similarity(ka, kb)
+                if s >= threshold:
+                    # Extra guard: require BOTH first AND last to be reasonably
+                    # similar (so "Alice Tremblay" vs "Alice Gauthier" doesn't
+                    # trip the trigger just on the shared first name).
+                    a_key, a = group[i]; b_key, b = group[j]
+                    s_first = similarity(fuzzy_key(a.first), fuzzy_key(b.first))
+                    s_last  = similarity(fuzzy_key(a.last),  fuzzy_key(b.last))
+                    if s_first >= 0.70 and s_last >= 0.70:
+                        results["same_club_fuzzy"].append(
+                            (f"{a.first} {a.last}", a.license or "-",
+                             f"{b.first} {b.last}", b.license or "-",
+                             a.club, s))
+
+    # 3) cross-club: same normalised name + same birthdate
+    by_name_dob: dict[tuple, list[tuple[tuple, "Inscription"]]] = {}
+    for akey, ins in athletes.items():
+        bd = ins.birthdate
+        bd_key = bd.date() if isinstance(bd, dt.datetime) else bd
+        k = (fuzzy_key(f"{ins.first} {ins.last}"), bd_key)
+        if k[0] and k[1] is not None:
+            by_name_dob.setdefault(k, []).append((akey, ins))
+    for (name_k, bd_k), group in by_name_dob.items():
+        # Skip when everyone is in the same club (already handled above)
+        clubs_ = {norm_key(ins.club) for _, ins in group}
+        if len(clubs_) < 2:
+            continue
+        # Report each cross-club pair once
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                _, a = group[i]; _, b = group[j]
+                if norm_key(a.club) == norm_key(b.club):
+                    continue
+                results["cross_club_same_person"].append(
+                    (f"{a.first} {a.last}", a.club, b.club,
+                     bd_k.isoformat() if bd_k else ""))
+
+    return results
+
+
 _TIME_RE_H = re.compile(r"^\s*(\d+):(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?\s*$")
 _TIME_RE_M = re.compile(r"^\s*(\d+):(\d{1,2})(?:[.,](\d{1,3}))?\s*$")
 _TIME_RE_S = re.compile(r"^\s*(\d+)(?:[.,](\d{1,3}))?\s*$")
@@ -442,25 +614,37 @@ class IssueCollector:
             out[(i.severity, i.category)].append(i)
         return out
 
-    def report(self, title: str = "Issues") -> None:
+    def report(self, title: str = "Issues",
+               out_file=None,
+               full: bool = False) -> None:
+        """Print (and optionally write to `out_file`) the issues section.
+
+        full=True removes the per-category cap (every issue listed)."""
         if not self.issues:
             return
         buckets = self.by_category()
-        # order: WARNING first, then NOTE; within each, by descending count
         ordered = sorted(buckets.items(),
                          key=lambda kv: (kv[0][0] != "WARNING", -len(kv[1])))
-        print("\n" + "=" * 60)
-        print(f"  {title}")
-        print("=" * 60)
+        cap = 10**9 if full else self.max_per_category
+
+        lines: list[str] = []
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append(f"  {title}")
+        lines.append("=" * 60)
         for (sev, cat), items in ordered:
-            head = f"  [{sev}] {cat}: {len(items)}"
-            print(head)
-            for it in items[: self.max_per_category]:
+            lines.append(f"  [{sev}] {cat}: {len(items)}")
+            for it in items[:cap]:
                 suffix = f" (row {it.row})" if it.row else ""
-                print(f"       - {it.message}{suffix}")
-            if len(items) > self.max_per_category:
-                print(f"       … and {len(items) - self.max_per_category} more")
-        print("=" * 60)
+                lines.append(f"       - {it.message}{suffix}")
+            if len(items) > cap:
+                lines.append(f"       … and {len(items) - cap} more")
+        lines.append("=" * 60)
+
+        block = "\n".join(lines)
+        print(block)
+        if out_file is not None:
+            out_file.write(block + "\n")
 
 
 def read_attendees(xlsx_path: Path,
@@ -728,7 +912,17 @@ def main():
     ap.add_argument("--wipe", action="store_true",
                     help="Delete any existing clubs/athletes/events/entries "
                          "before loading.")
+    ap.add_argument("--issues-full", action="store_true",
+                    help="List every issue, no per-category cap. "
+                         "Useful when handing the report to someone who "
+                         "has to fix the source xlsx row by row.")
+    ap.add_argument("--issues-out", type=Path,
+                    help="Also write the issues section to the given "
+                         "file (plain text). Implies --issues-full.")
     args = ap.parse_args()
+
+    if args.issues_out:
+        args.issues_full = True
 
     if not args.xlsx.exists():
         sys.exit(f"xlsx not found: {args.xlsx}")
@@ -809,11 +1003,12 @@ def main():
                 f"{clubs[cnorm]}: {len(members)}/{ev.relay_count} athletes "
                 f"for {ev.name_fr} ({ev.age_code})")
         elif leftovers:
+            n_squads = (len(members) + ev.relay_count - 1) // ev.relay_count
             issues.note(
                 "extra_relay_members",
                 f"{clubs[cnorm]}: {len(members)} athletes for "
-                f"{ev.name_fr} ({ev.age_code}) — "
-                f"{leftovers} extra tucked onto last squad")
+                f"{ev.name_fr} ({ev.age_code}) — split into {n_squads} "
+                f"squads, the last one has only {leftovers}/{ev.relay_count}")
 
     # Non-race-only clubs / athletes (informational).  Re-scan the xlsx
     # so we can compare what's in the sheet vs what we imported.
@@ -826,25 +1021,57 @@ def main():
     i_cl = hdr.index("Club")
     i_lc = hdr.index("NRAN")
     all_clubs: set[str] = set()
-    all_athletes: set[tuple] = set()
+    all_names: set[str] = set()   # athlete name only (not keyed on license)
     for r in rows_all[1:]:
         if not r or not r[i_f] or not r[i_l]:
             continue
         all_clubs.add(norm_key(r[i_cl] or "Unattached"))
-        all_athletes.add((norm_key(r[i_f], r[i_l]),
-                          str(r[i_lc]).strip() if r[i_lc] else ""))
-    race_athletes = set(athletes.keys())
+        all_names.add(norm_key(r[i_f], r[i_l]))
+    # Athletes that DID get imported — collapse to name-only identifiers
+    # so that someone who has both a race row (with license) and a Banquet
+    # row (no license) is counted as one person, not two.
+    race_names = {akey[0] for akey in athletes.keys()}
     race_clubs = set(clubs.keys())
     n_club_skipped = len(all_clubs - race_clubs)
-    n_ath_skipped = len(all_athletes - race_athletes)
+    n_ath_skipped = len(all_names - race_names)
     if n_club_skipped:
         issues.note("non_race_only_club",
                     f"{n_club_skipped} club(s) appear only on non-race "
                     f"tickets (Banquet/Coach/Officiel/…) — not imported")
     if n_ath_skipped:
         issues.note("non_race_only_athlete",
-                    f"{n_ath_skipped} athlete(s) appear only on non-race "
-                    f"tickets — not imported")
+                    f"{n_ath_skipped} attendee(s) only bought non-race "
+                    f"tickets (supporters, coaches, officials, hotel) "
+                    f"— not imported as athletes")
+
+    # ----- Fuzzy duplicate detection (clubs + athletes) -----
+    # Count rows per club display-name so the warning can show scale.
+    club_row_counts: dict[str, int] = defaultdict(int)
+    for ins in inscriptions:
+        club_row_counts[ins.club] += 1
+
+    for a, b, sim, ca, cb in find_fuzzy_club_duplicates(dict(club_row_counts)):
+        issues.warn(
+            "possible_duplicate_club",
+            f"{a!r} ({ca} rows) vs {b!r} ({cb} rows) "
+            f"— similarity {sim:.2f}")
+
+    fuzzy = find_fuzzy_athlete_duplicates(athletes)
+    for (name_a, club_a, name_b, club_b, lic) in fuzzy["same_license"]:
+        issues.warn(
+            "license_name_mismatch",
+            f"license {lic!r}: {name_a!r} ({club_a}) vs {name_b!r} ({club_b})"
+            f" — same license, different name spelling")
+    for (name_a, lic_a, name_b, lic_b, club, sim) in fuzzy["same_club_fuzzy"]:
+        issues.warn(
+            "possible_duplicate_athlete",
+            f"{club}: {name_a!r} (NRAN {lic_a}) vs {name_b!r} "
+            f"(NRAN {lic_b}) — similarity {sim:.2f}")
+    for (name, club_a, club_b, dob) in fuzzy["cross_club_same_person"]:
+        issues.warn(
+            "same_person_different_club",
+            f"{name!r} born {dob} appears in both {club_a!r} and "
+            f"{club_b!r} — probably the same person")
 
     # ----- open MDB -----
     print(f"\nOpening {args.mdb}...")
@@ -1336,7 +1563,9 @@ def main():
         # the bracket as a whole, not per-athlete)
         rel_target = event_targets[ekey][0]
         event_id, relay_ag, _, _ = rel_target
-        # Chunk members into squads of ev.relay_count
+        # Chunk members into squads of ev.relay_count.  Any leftover
+        # athletes become an additional (incomplete) squad so MM can
+        # show them — the coach then picks the final line-up inside MM.
         chunks: list[list[tuple]] = []
         buf: list[tuple] = []
         for m in members:
@@ -1344,10 +1573,7 @@ def main():
             if len(buf) == ev.relay_count:
                 chunks.append(buf); buf = []
         if buf:
-            if chunks:
-                chunks[-1].extend(buf)
-            else:
-                chunks.append(buf)
+            chunks.append(buf)    # leftover squad (may be <relay_count)
 
         for team_no, squad in enumerate(chunks, start=1):
             relay_key = (club_id, event_id, team_no)
@@ -1538,8 +1764,19 @@ def main():
     print(f"\nAllocated UIDs {db._start_uid+1}..{db._uid}  "
           f"({db._uid - db._start_uid} new rows)")
 
-    # Emit the issues section (data-quality findings) if any were collected
-    issues.report("Issues found while parsing / loading")
+    # Emit the issues section (data-quality findings) if any were collected.
+    if args.issues_out:
+        with open(args.issues_out, "w", encoding="utf-8") as fh:
+            # Write the xlsx filename at the top of the output file so the
+            # recipient knows which workbook it's from.
+            fh.write(f"Data-quality report for: {args.xlsx}\n")
+            fh.write(f"Generated: {dt.datetime.now():%Y-%m-%d %H:%M:%S}\n")
+            issues.report("Issues found while parsing",
+                          out_file=fh, full=True)
+        print(f"\n(issues written to {args.issues_out})")
+    else:
+        issues.report("Issues found while parsing / loading",
+                      full=args.issues_full)
 
     db.commit()
     db.close()

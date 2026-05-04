@@ -350,6 +350,54 @@ def build_rows(athletes, rng):
         "1:45.00", "Cedar Creek LSC", over_age_dob, "OVERAGE1",
     ])
 
+    # 4h) Fuzzy-duplicate scenarios (each should trigger one warning)
+
+    # 4h-i) Club spelling variant — "Béluga Sauvetage" vs "Beluga Sauvetage"
+    #       (accent-folded identical) and "Aurora Test Club" vs
+    #       "Aurora Test  Club" (double-space).
+    rows.append([
+        "Varianta", "Clubtyperow", "clubtv1@x.com", "Open F Obstacle",
+        "1:33.00", "Beluga Sauvetage",           # no accent
+        "01/01/1998", "CLUBVAR01",
+    ])
+    rows.append([
+        "Variantb", "Clubtyperow", "clubtv2@x.com", "Open M Obstacle",
+        "1:28.00", "Aurora Test  Club",          # double space
+        "01/01/1998", "CLUBVAR02",
+    ])
+
+    # 4h-ii) Same license, different name spelling — "Henri Chiu" vs
+    #        "Henri Tsz Hin Chiu" (both use the same NRAN).
+    rows.append([
+        "Henri", "Chiu", "chiu1@x.com", "Open M Remorquage",
+        "1:34.00", "Aurora Test Club", "15/05/1999", "CHIU_SAME",
+    ])
+    rows.append([
+        "Henri Tsz Hin", "Chiu", "chiu2@x.com", "Open M Remorquage",
+        "1:34.00", "Aurora Test Club", "15/05/1999", "CHIU_SAME",
+    ])
+
+    # 4h-iii) Athlete name typo within same club — "Stephen Kennedy" vs
+    #         "Stphen Kennedy" (missing 'e').
+    rows.append([
+        "Stephen", "Kennedy", "k1@x.com", "Open M Obstacle",
+        "2:22.00", "Elite Rescue", "06/02/1971", "KENN01",
+    ])
+    rows.append([
+        "Stphen", "Kennedy", "k2@x.com", "Open M Obstacle",
+        "2:23.00", "Elite Rescue", "06/02/1971", "KENN02",
+    ])
+
+    # 4h-iv) Cross-club same-person — same name+DOB in two clubs.
+    rows.append([
+        "Gabrielle", "Fortin", "gf1@x.com", "Open F Obstacle",
+        "1:40.00", "Dauphins de l'Est", "03/03/2000", "GFORT_A",
+    ])
+    rows.append([
+        "Gabrielle", "Fortin", "gf2@x.com", "Open F Obstacle",
+        "1:41.00", "Elite Rescue", "03/03/2000", "GFORT_B",
+    ])
+
     return rows
 
 
