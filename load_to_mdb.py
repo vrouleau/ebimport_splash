@@ -494,52 +494,60 @@ _TIME_RE_S = re.compile(r"^\s*(\d+)(?:[.,](\d{1,3}))?\s*$")
 
 
 def parse_best_time(val: Any) -> int | None:
-    """Parse a swim best time into hundredths of a second, or None.
+    """Parse a swim best time into MILLISECONDS, or None.
 
-    Recognised formats (swim conventions):
-        hh:mm:ss[.cc]
-        mm:ss[.cc]           <-- most common
-        ss[.cc]
+    SPLASH's SWIMRESULT.ENTRYTIME / SWIMTIME column stores milliseconds,
+    not hundredths of a second — confirmed against the 30-Deux federation
+    sample where a 50 m obstacle result of SWIMTIME=45520 corresponds
+    to 45.520 s (as milliseconds), not 7:35.20 (as centiseconds).
+
+    Recognised formats:
+        hh:mm:ss[.fff]
+        mm:ss[.fff]          <-- most common in lifesaving meets
+        ss[.fff]
         An Excel time object (datetime.time / timedelta-like)
         A float/int in seconds
+    Fractional part is padded to 3 digits ('1:05' -> 65000 ms,
+    '1:05.3' -> 65300 ms, '1:05.37' -> 65370 ms, '1:05.371' -> 65371 ms).
     """
     if val is None:
         return None
     if isinstance(val, dt.time):
-        return ((val.hour * 3600 + val.minute * 60 + val.second) * 100
-                + val.microsecond // 10000)
+        return ((val.hour * 3600 + val.minute * 60 + val.second) * 1000
+                + val.microsecond // 1000)
     if isinstance(val, dt.timedelta):
-        return int(round(val.total_seconds() * 100))
+        return int(round(val.total_seconds() * 1000))
     if isinstance(val, (int, float)):
         x = float(val)
         if 0 < x < 1:                    # Excel fraction-of-day
-            return int(round(x * 24 * 3600 * 100))
+            return int(round(x * 24 * 3600 * 1000))
         if x > 0:                        # seconds
-            return int(round(x * 100))
+            return int(round(x * 1000))
         return None
     s = str(val).strip()
     if not s or s.lower() in ("nt", "n/a", "na", "-"):
         return None
 
-    def _cs(fs: str | None) -> int:
+    def _ms(fs: str | None) -> int:
+        """Normalise a fractional-seconds string to milliseconds (0-999)."""
         fs = (fs or "0")
-        fs = (fs + "00")[:2]             # normalise to hundredths
+        fs = (fs + "000")[:3]
         return int(fs)
 
     m = _TIME_RE_H.match(s)
     if m:
         h, mm, ss, fs = m.group(1), m.group(2), m.group(3), m.group(4)
-        total = (int(h) * 3600 + int(mm) * 60 + int(ss)) * 100 + _cs(fs)
+        total = (int(h) * 3600 + int(mm) * 60 + int(ss)) * 1000 + _ms(fs)
         return total if total > 0 else None
     m = _TIME_RE_M.match(s)
     if m:
         mm, ss, fs = m.group(1), m.group(2), m.group(3)
-        total = (int(mm) * 60 + int(ss)) * 100 + _cs(fs)
+        total = (int(mm) * 60 + int(ss)) * 1000 + _ms(fs)
         return total if total > 0 else None
     m = _TIME_RE_S.match(s)
     if m:
         ss, fs = m.group(1), m.group(2)
-        total = int(ss) * 100 + _cs(fs)
+        total = int(ss) * 1000 + _ms(fs)
         return total if total > 0 else None
     return None
 
@@ -573,7 +581,7 @@ class Inscription:
     club: str
     birthdate: dt.datetime | None
     license: str | None
-    best_time_cs: int | None
+    best_time_ms: int | None
     event: EventKey
     teammates: str | None = None  # raw string, used only for relay debug
 
@@ -715,8 +723,8 @@ def read_attendees(xlsx_path: Path,
 
         # Parse best time + birthdate; track failures
         raw_time = r[i_best]
-        best_cs = parse_best_time(raw_time)
-        if raw_time not in (None, "") and best_cs is None \
+        best_ms = parse_best_time(raw_time)
+        if raw_time not in (None, "") and best_ms is None \
                 and str(raw_time).strip().lower() not in ("nt", "n/a", "na", "-"):
             if issues:
                 issues.warn("bad_time",
@@ -756,7 +764,7 @@ def read_attendees(xlsx_path: Path,
                         f"{first} {last} entered in {ticket!r} again "
                         f"(first seen row {prev_row}); keeping best time",
                         row=row_idx)
-        seen_pairs[pair_key] = (row_idx, best_cs)
+        seen_pairs[pair_key] = (row_idx, best_ms)
 
         out.append(Inscription(
             first=str(first).strip(),
@@ -765,7 +773,7 @@ def read_attendees(xlsx_path: Path,
             club=str(club_raw).strip(),
             birthdate=bd,
             license=(str(r[i_lic]).strip() if r[i_lic] else None),
-            best_time_cs=best_cs,
+            best_time_ms=best_ms,
             event=ev,
             teammates=(str(r[i_team]).strip()
                        if i_team is not None and r[i_team] else None),
@@ -938,9 +946,9 @@ def main():
     clubs: dict[str, str] = {}          # norm_name -> display name
     athletes: dict[tuple, Inscription] = {}  # (norm first,last,license) -> record
     events: dict[tuple, EventKey] = {}  # EventKey.key() -> EventKey
-    ind_entries: list[tuple] = []       # (athlete_key, event_key, best_cs)
+    ind_entries: list[tuple] = []       # (athlete_key, event_key, best_ms)
     relay_groups: dict[tuple, list[tuple]] = defaultdict(list)
-    # relay_groups key: (club_norm, event_key) -> list[(athlete_key, best_cs)]
+    # relay_groups key: (club_norm, event_key) -> list[(athlete_key, best_ms)]
 
     for ins in inscriptions:
         club_norm = norm_key(ins.club)
@@ -952,10 +960,10 @@ def main():
         events.setdefault(ins.event.key(), ins.event)
 
         if ins.event.relay_count == 1:
-            ind_entries.append((ath_key, ins.event.key(), ins.best_time_cs))
+            ind_entries.append((ath_key, ins.event.key(), ins.best_time_ms))
         else:
             relay_groups[(club_norm, ins.event.key())].append(
-                (ath_key, ins.best_time_cs))
+                (ath_key, ins.best_time_ms))
 
     print(f"  distinct clubs:    {len(clubs)}")
     print(f"  distinct athletes: {len(athletes)}")

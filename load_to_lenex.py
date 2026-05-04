@@ -185,30 +185,35 @@ _TIME_RE_M = re.compile(r"^\s*(\d+):(\d{1,2})(?:[.,](\d{1,3}))?\s*$")
 _TIME_RE_S = re.compile(r"^\s*(\d+)(?:[.,](\d{1,3}))?\s*$")
 
 
-def parse_best_time_cs(val: Any) -> int | None:
-    """Return hundredths of a second, or None."""
+def parse_best_time_ms(val: Any) -> int | None:
+    """Parse a swim best time into MILLISECONDS, or None.
+
+    Internally we normalise to ms for consistency with load_to_mdb.py
+    (SPLASH's SWIMRESULT.ENTRYTIME is milliseconds); the Lenex wire
+    format uses hundredths and is emitted via `ms_to_lenex()`.
+    """
     if val is None:
         return None
     if isinstance(val, dt.time):
-        return ((val.hour * 3600 + val.minute * 60 + val.second) * 100
-                + val.microsecond // 10000)
+        return ((val.hour * 3600 + val.minute * 60 + val.second) * 1000
+                + val.microsecond // 1000)
     if isinstance(val, dt.timedelta):
-        return int(round(val.total_seconds() * 100))
+        return int(round(val.total_seconds() * 1000))
     if isinstance(val, (int, float)):
         x = float(val)
         if 0 < x < 1:
-            return int(round(x * 24 * 3600 * 100))
+            return int(round(x * 24 * 3600 * 1000))
         if x > 0:
-            return int(round(x * 100))
+            return int(round(x * 1000))
         return None
     s = str(val).strip()
     if not s or s.lower() in ("nt", "n/a", "na", "-"):
         return None
-    def _cs(fs): return int(((fs or "0") + "00")[:2])
+    def _ms(fs): return int(((fs or "0") + "000")[:3])
     for regex, builder in [
-        (_TIME_RE_H, lambda g: (int(g[0])*3600 + int(g[1])*60 + int(g[2]))*100 + _cs(g[3])),
-        (_TIME_RE_M, lambda g: (int(g[0])*60 + int(g[1]))*100 + _cs(g[2])),
-        (_TIME_RE_S, lambda g: int(g[0])*100 + _cs(g[1])),
+        (_TIME_RE_H, lambda g: (int(g[0])*3600 + int(g[1])*60 + int(g[2]))*1000 + _ms(g[3])),
+        (_TIME_RE_M, lambda g: (int(g[0])*60 + int(g[1]))*1000 + _ms(g[2])),
+        (_TIME_RE_S, lambda g: int(g[0])*1000 + _ms(g[1])),
     ]:
         m = regex.match(s)
         if m:
@@ -217,14 +222,15 @@ def parse_best_time_cs(val: Any) -> int | None:
     return None
 
 
-def cs_to_lenex(cs: int | None) -> str | None:
-    """Lenex wants swim times as 'HH:MM:SS.cc'."""
-    if cs is None:
+def ms_to_lenex(ms: int | None) -> str | None:
+    """Lenex wants swim times as 'HH:MM:SS.cc' (hundredths)."""
+    if ms is None:
         return None
-    total_s, h = divmod(int(cs), 100)
+    total_s, sub = divmod(int(ms), 1000)
+    hundredths = sub // 10
     hh, rest = divmod(total_s, 3600)
     mm, ss = divmod(rest, 60)
-    return f"{hh:02d}:{mm:02d}:{ss:02d}.{h:02d}"
+    return f"{hh:02d}:{mm:02d}:{ss:02d}.{hundredths:02d}"
 
 
 def parse_birthdate(val: Any) -> dt.date | None:
@@ -407,7 +413,7 @@ class Inscription:
     club: str
     birthdate: dt.date | None
     license: str | None
-    best_cs: int | None
+    best_ms: int | None
     event: EventKey
 
 
@@ -503,7 +509,7 @@ def read_attendees(xlsx: Path,
             continue
 
         raw_time = r[i_best]
-        bt = parse_best_time_cs(raw_time)
+        bt = parse_best_time_ms(raw_time)
         if raw_time not in (None, "") and bt is None \
                 and str(raw_time).strip().lower() not in ("nt","n/a","na","-"):
             if issues:
@@ -542,7 +548,7 @@ def read_attendees(xlsx: Path,
             club=str(r[i_club] or "Unattached").strip(),
             birthdate=bd,
             license=(str(r[i_lic]).strip() if r[i_lic] else None),
-            best_cs=bt,
+            best_ms=bt,
             event=ev,
         ))
     return out
@@ -572,9 +578,9 @@ def build_lenex(inscriptions: list[Inscription]) -> ET.ElementTree:
             athletes[akey] = ins
         events.setdefault(ins.event, None)  # placeholder, numbered below
         if ins.event.relay_count == 1:
-            ind_entries.append((cnorm, akey, ins.event, ins.best_cs))
+            ind_entries.append((cnorm, akey, ins.event, ins.best_ms))
         else:
-            relay_groups[(cnorm, ins.event)].append((akey, ins.best_cs))
+            relay_groups[(cnorm, ins.event)].append((akey, ins.best_ms))
 
     # Assign event numbers deterministically.
     # Sort: by catalog UID (all events of the same style together), then by
@@ -727,7 +733,7 @@ def build_lenex(inscriptions: list[Inscription]) -> ET.ElementTree:
                             "eventid": str(100 + events[ev]),
                             "status":  "",
                         }
-                        et_str = cs_to_lenex(bt)
+                        et_str = ms_to_lenex(bt)
                         if et_str:
                             attrs["entrytime"] = et_str
                             attrs["entrycourse"] = MEET_COURSE
@@ -769,7 +775,7 @@ def build_lenex(inscriptions: list[Inscription]) -> ET.ElementTree:
                         "eventid": str(100 + events[ev]),
                     }
                     if entry_cs is not None:
-                        entry_attrs["entrytime"] = cs_to_lenex(entry_cs)
+                        entry_attrs["entrytime"] = ms_to_lenex(entry_cs)
                         entry_attrs["entrycourse"] = MEET_COURSE
                     entry_el = ET.SubElement(ents, "ENTRY", entry_attrs)
                     positions = ET.SubElement(entry_el, "RELAYPOSITIONS")
