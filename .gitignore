@@ -1,0 +1,33 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ---- SPLASH / Access artefacts (never commit real meet data) ----
+*.mdb
+*.ldb
+*.accdb
+*.lef
+*.lxf
+*.xlsx
+
+# but DO commit the synthetic test fixture
+!tests/test_attendees.xlsx
+
+# ---- UCanAccess runtime (downloaded locally; do not check in) ----
+ucanaccess/
+ucanaccess-*/
+UCanAccess-*/
+*.jar
