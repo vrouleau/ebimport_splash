@@ -44,9 +44,7 @@ def ms_to_lenex(ms: int | None) -> str:
     rem = rem % 60_000
     s = rem // 1000
     cs = (rem % 1000) // 10
-    if h:
-        return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
-    return f"{m:02d}:{s:02d}.{cs:02d}"
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
 def lenex_gender(g: int) -> str:
