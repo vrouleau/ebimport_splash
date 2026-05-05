@@ -34,6 +34,7 @@ from flask import (
 APP_DIR     = Path(__file__).parent.resolve()
 REPO_ROOT   = APP_DIR.parent
 MDB_LOADER  = REPO_ROOT / "load_to_mdb.py"
+COPY_SCRIPT = REPO_ROOT / "copy_prelim_to_masters_final.py"
 
 STAGING_DIR = Path(os.environ.get("STAGING_DIR", "/tmp/ebimport_staging"))
 STAGING_DIR.mkdir(parents=True, exist_ok=True)
@@ -343,6 +344,57 @@ def api_download(sid: str):
     def _cleanup():
         _drop_staging(sid)
     return resp
+
+
+@app.route("/api/copy-masters", methods=["POST"])
+def api_copy_masters():
+    """Run copy_prelim_to_masters_final.py on an uploaded .mdb."""
+    _gc_stagings()
+    mdb_upload = request.files.get("mdb")
+    if mdb_upload is None or not mdb_upload.filename:
+        return jsonify({"error": "Un fichier .mdb est requis."}), 400
+
+    dry_run = request.form.get("dry_run", "false").lower() in ("1", "true", "yes")
+
+    staging = _new_staging()
+    try:
+        mdb_path = staging.dir / "meet.mdb"
+        mdb_upload.save(mdb_path)
+        if mdb_path.stat().st_size > MAX_MDB_BYTES:
+            return jsonify({"error": "Fichier mdb trop volumineux."}), 413
+
+        env = os.environ.copy()
+        env.setdefault("UCANACCESS_DIR", str(REPO_ROOT / "vendor" / "ucanaccess"))
+        cmd = [sys.executable, str(COPY_SCRIPT), "--mdb", str(mdb_path)]
+        if dry_run:
+            cmd.append("--dry-run")
+
+        completed = subprocess.run(
+            cmd, capture_output=True, text=True, env=env, timeout=300)
+        output = (completed.stdout or "") + "\n" + (completed.stderr or "")
+
+        result = {
+            "returncode": completed.returncode,
+            "output": output.strip(),
+            "dry_run": dry_run,
+        }
+
+        # Offer the modified mdb as download (unless dry-run)
+        if not dry_run and completed.returncode == 0:
+            zip_path = staging.result_zip
+            with zipfile.ZipFile(zip_path, "w",
+                                 compression=zipfile.ZIP_DEFLATED) as z:
+                z.write(mdb_path, arcname="meet.mdb")
+            result["download_id"] = staging.id
+
+        return jsonify(result)
+    except subprocess.TimeoutExpired:
+        _drop_staging(staging.id)
+        return jsonify({"error": "Dépassement du délai (5 min)."}), 504
+    except Exception as e:
+        _drop_staging(staging.id)
+        app.logger.exception("copy-masters failure")
+        return jsonify({"error": f"Erreur interne: {e}"}), 500
 
 
 @app.route("/healthz")

@@ -1029,6 +1029,21 @@ class TemplateIndex:
                         return e
         return candidates[0]
 
+    def find_prelim_for_dual_entry(self, uid: int, gender: int
+                                    ) -> TemplateEvent | None:
+        """Find the non-Masters prelim event for (uid, gender) that has
+        at least one Masters-style age bracket (amin in 25..99).
+        Returns None if no such event exists (dual-entry not configured).
+        """
+        candidates = self.events_by_uid_gender.get((uid, gender), [])
+        for e in candidates:
+            if e.masters or e.round != ROUND_PRELIM:
+                continue
+            for a in e.agegroups:
+                if a.amin is not None and 25 <= a.amin < 100:
+                    return e
+        return None
+
 
 def pick_agegroup_for_individual(
         event: TemplateEvent, age_code: str, athlete_age: int | None
@@ -1341,7 +1356,7 @@ def main():
         "club_new": 0, "athlete_new": 0,
         "athlete_gender_fix": 0, "athlete_license_fix": 0,
         "athlete_birthdate_fix": 0, "athlete_club_fix": 0,
-        "entry_new": 0, "entry_time_faster": 0,
+        "entry_new": 0, "entry_dual": 0, "entry_time_faster": 0,
         "relay_new": 0, "relayposition_new": 0,
         "masters_skipped_no_dob": 0,
     }
@@ -1485,6 +1500,29 @@ def main():
         if cur is None or (cs is not None and (cur[0] is None or cs < cur[0])):
             best_by[(akey, ekey)] = (cs, ath.birthdate)
 
+    def _sr_row(sr_id, aid, eid, agid, cs):
+        return {
+            "SWIMRESULTID":  sr_id,
+            "ATHLETEID":     aid,
+            "SWIMEVENTID":   eid,
+            "AGEGROUPID":    agid,
+            "ENTRYTIME":     cs,
+            "ENTRYCOURSE":   0,
+            "RESULTSTATUS":  0,
+            "BONUSENTRY":    "F",
+            "DSQNOTIFIED":   "F",
+            "FINALFIX":      "F",
+            "LATEENTRY":     "F",
+            "NOADVANCE":     "F",
+            "BACKUPTIME1":   0, "BACKUPTIME2": 0, "BACKUPTIME3": 0,
+            "FINISHJUDGE":   0,
+            "PADTIME":       INT_MAX,
+            "QTCOURSE":      0,
+            "QTTIME":        INT_MAX,
+            "QTTIMING":      0,
+            "REACTIONTIME":  -32768,
+        }
+
     sr_batch: list[dict] = []
     for (akey, ekey), (cs, bd) in best_by.items():
         ev = events_in_xlsx[ekey]
@@ -1505,37 +1543,45 @@ def main():
 
         aid = athlete_ids[akey]
         eid = tevent.swim_event_id
+
+        # Primary entry (Masters final or non-Masters prelim)
         if (aid, eid) in existing_results:
             _sr_id, cur_cs = existing_results[(aid, eid)]
             if cs is not None and (cur_cs is None or cs < cur_cs):
                 db.update("SWIMRESULT", {"SWIMRESULTID": _sr_id},
                           {"ENTRYTIME": cs})
                 stats["entry_time_faster"] += 1
-            continue
-        sr_id = db.next_id()
-        sr_batch.append({
-            "SWIMRESULTID":  sr_id,
-            "ATHLETEID":     aid,
-            "SWIMEVENTID":   eid,
-            "AGEGROUPID":    ag.agegroup_id,
-            "ENTRYTIME":     cs,
-            "ENTRYCOURSE":   0,
-            "RESULTSTATUS":  0,
-            "BONUSENTRY":    "F",
-            "DSQNOTIFIED":   "F",
-            "FINALFIX":      "F",
-            "LATEENTRY":     "F",
-            "NOADVANCE":     "F",
-            "BACKUPTIME1":   0, "BACKUPTIME2": 0, "BACKUPTIME3": 0,
-            "FINISHJUDGE":   0,
-            "PADTIME":       INT_MAX,
-            "QTCOURSE":      0,
-            "QTTIME":        INT_MAX,
-            "QTTIMING":      0,
-            "REACTIONTIME":  -32768,
-        })
-        stats["entry_new"] += 1
-        existing_results[(aid, eid)] = (sr_id, cs)
+        else:
+            sr_id = db.next_id()
+            sr_batch.append(_sr_row(sr_id, aid, eid, ag.agegroup_id, cs))
+            stats["entry_new"] += 1
+            existing_results[(aid, eid)] = (sr_id, cs)
+
+        # Dual-entry: Masters individual also swims in the non-Masters
+        # prelim if that event has a Masters-style bracket for their age.
+        if ev.age_code == "MASTERS" and athlete_age is not None:
+            prelim_ev = template.find_prelim_for_dual_entry(
+                ev.uniqueid, ev.gender)
+            if prelim_ev is not None:
+                prelim_ag = pick_agegroup_for_individual(
+                    prelim_ev, "MASTERS", athlete_age)
+                if prelim_ag is not None:
+                    prelim_eid = prelim_ev.swim_event_id
+                    if (aid, prelim_eid) in existing_results:
+                        _sr_id, cur_cs = existing_results[(aid, prelim_eid)]
+                        if cs is not None and (cur_cs is None or cs < cur_cs):
+                            db.update("SWIMRESULT",
+                                      {"SWIMRESULTID": _sr_id},
+                                      {"ENTRYTIME": cs})
+                            stats["entry_time_faster"] += 1
+                    else:
+                        sr_id = db.next_id()
+                        sr_batch.append(_sr_row(
+                            sr_id, aid, prelim_eid,
+                            prelim_ag.agegroup_id, cs))
+                        stats["entry_dual"] += 1
+                        existing_results[(aid, prelim_eid)] = (sr_id, cs)
+
     db.insert_many("SWIMRESULT", sr_batch)
 
     # ----- RELAY + RELAYPOSITION -----
@@ -1674,6 +1720,7 @@ def main():
     line("athlete birthdate fills",       stats["athlete_birthdate_fix"])
     line("athlete club changes",          stats["athlete_club_fix"])
     line("new individual entries",        stats["entry_new"])
+    line("dual entries (Masters→prelim)",  stats["entry_dual"])
     line("entries updated (faster time)", stats["entry_time_faster"])
     line("new relay squads",              stats["relay_new"])
     line("new relay positions",           stats["relayposition_new"])

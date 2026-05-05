@@ -49,7 +49,7 @@ RUN mkdir -p /opt/ucanaccess \
 
 # App code (loaders + webapp)
 WORKDIR /app
-COPY load_to_mdb.py ./
+COPY load_to_mdb.py copy_prelim_to_masters_final.py ./
 COPY webapp ./webapp
 
 # Point the loader at the bundled UCanAccess jars
