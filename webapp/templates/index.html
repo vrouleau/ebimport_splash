@@ -47,19 +47,17 @@
       </fieldset>
 
       <fieldset id="mdb-opts">
-        <legend>Fichier <code>.mdb</code> SPLASH <span class="req">*</span></legend>
+        <legend>Fichier <code>.mdb</code> SPLASH</legend>
         <label>
           Base <code>.mdb</code> (modèle ou en cours de remplissage) :
-          <input type="file" name="mdb" accept=".mdb" required>
+          <input type="file" name="mdb" accept=".mdb">
         </label>
         <p class="hint">
-          <strong>Obligatoire.</strong>
+          <strong>Optionnel.</strong> Si laissé vide, le modèle
+          Championnats canadiens intégré est utilisé.
           La structure des épreuves (styles, événements, groupes d'âge,
           sessions) est prise telle quelle depuis ce fichier — le
           chargeur n'ajoute que les clubs, athlètes et inscriptions.
-          Si aucune inscription n'est présente dans le <code>.mdb</code>,
-          c'est considéré comme un premier chargement ; sinon, c'est une
-          mise à jour additive.
         </p>
       </fieldset>
 

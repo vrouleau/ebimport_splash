@@ -17,6 +17,7 @@ Thumbs.db
 
 # ---- SPLASH / Access artefacts (never commit real meet data) ----
 *.mdb
+!template.mdb
 *.ldb
 *.accdb
 *.lef

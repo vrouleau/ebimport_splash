@@ -36,6 +36,7 @@ REPO_ROOT   = APP_DIR.parent
 MDB_LOADER  = REPO_ROOT / "load_to_mdb.py"
 LNX_LOADER  = REPO_ROOT / "load_to_lenex.py"
 COPY_SCRIPT = REPO_ROOT / "copy_prelim_to_masters_final.py"
+DEFAULT_MDB = REPO_ROOT / "template.mdb"
 
 STAGING_DIR = Path(os.environ.get("STAGING_DIR", "/tmp/ebimport_staging"))
 STAGING_DIR.mkdir(parents=True, exist_ok=True)
@@ -304,13 +305,9 @@ def api_run():
     if xlsx is None or not xlsx.filename:
         return jsonify({"error": "Aucun fichier xlsx reçu."}), 400
 
-    # Both modes require the user-supplied .mdb template.
+    # MDB template — use uploaded file or fall back to bundled default.
     mdb_upload = request.files.get("mdb")
-    if mdb_upload is None or not mdb_upload.filename:
-        return jsonify({
-            "error": "Un fichier .mdb modèle est requis "
-                     "(la structure des épreuves y est prise "
-                     "telle quelle)."}), 400
+    user_mdb_path: Path | None = None
 
     staging = _new_staging()
     try:
@@ -319,12 +316,16 @@ def api_run():
         if xlsx_path.stat().st_size > MAX_XLSX_BYTES:
             return jsonify({"error": "Fichier xlsx trop volumineux."}), 413
 
-        mdb_path = staging.dir / "input.mdb"
-        mdb_upload.save(mdb_path)
-        if mdb_path.stat().st_size > MAX_MDB_BYTES:
-            return jsonify({"error": "Fichier mdb trop volumineux."}), 413
+        if mdb_upload and mdb_upload.filename:
+            mdb_path = staging.dir / "input.mdb"
+            mdb_upload.save(mdb_path)
+            if mdb_path.stat().st_size > MAX_MDB_BYTES:
+                return jsonify({"error": "Fichier mdb trop volumineux."}), 413
+            user_mdb_path = mdb_path
+        else:
+            user_mdb_path = DEFAULT_MDB
 
-        parsed = run_loader(mode, xlsx_path, staging, user_mdb=mdb_path)
+        parsed = run_loader(mode, xlsx_path, staging, user_mdb=user_mdb_path)
         return jsonify(parsed)
     except subprocess.TimeoutExpired:
         _drop_staging(staging.id)
