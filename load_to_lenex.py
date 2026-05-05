@@ -310,9 +310,24 @@ def main():
             relays_xml = ET.SubElement(club_xml, "RELAYS")
             for ekey, squads in club_relays:
                 ev = events_in_xlsx[ekey]
-                tevent = template.find_event(
-                    ev.uniqueid, ev.gender,
-                    masters=(ev.age_code == "MASTERS"))
+                # For relays in Lenex, use the final event (ROUND=9 for
+                # non-Masters, ROUND=1 for Masters) — SPLASH imports
+                # relay entries into finals, not prelims.
+                if ev.age_code == "MASTERS":
+                    tevent = template.find_event(
+                        ev.uniqueid, ev.gender, masters=True)
+                else:
+                    # Find the ROUND=9 final for this relay
+                    candidates = template.events_by_uid_gender.get(
+                        (ev.uniqueid, ev.gender), [])
+                    tevent = None
+                    for e in candidates:
+                        if not e.masters and e.round == 9:
+                            tevent = e; break
+                    if tevent is None:
+                        # Fallback to timed final or prelim
+                        tevent = template.find_event(
+                            ev.uniqueid, ev.gender, masters=False)
                 if tevent is None:
                     continue
                 style = template.styles_by_uid[ev.uniqueid]
