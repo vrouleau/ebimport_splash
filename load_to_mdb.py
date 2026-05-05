@@ -106,7 +106,7 @@ NON_RACE_PREFIXES = (
 # key    : (ticket_label, is_relay, is_masters_obstacle)
 # value  : UNIQUEID
 TICKET_UID: dict[tuple, int] = {
-    ("Corde",             False, False): 504,
+    ("Corde",             True,  False): 504,    # 12 m duo relay (RELAYCOUNT=2)
     ("Obstacle",          False, False): 501,    # 15-18 / Open
     ("Obstacle",          False, True):  541,    # Masters 100 m
     ("Portage",           False, False): 502,    # 100 m
@@ -180,6 +180,13 @@ def parse_ticket(ticket: str) -> EventKey | None:
     mb = re.match(r"^(.*?)(?:\s+(\d+)\s*m)?$", body)
     label = mb.group(1).strip()
     dist_txt = mb.group(2)
+
+    # Corde is a gendered duo relay (RELAYCOUNT=2), not an individual event.
+    if label == "Corde":
+        uid = TICKET_UID.get(("Corde", True, False))
+        if uid is None:
+            return None
+        return EventKey(age_code, gender, uid, is_relay=True)
 
     lookup_label = label
     is_masters_obstacle = False
@@ -1076,11 +1083,14 @@ def pick_agegroup_for_individual(
 
 
 def pick_agegroup_for_relay(
-        event: TemplateEvent, age_code: str, squad_age_sum: int | None
+        event: TemplateEvent, age_code: str, squad_age_sum: int | None,
+        oldest_age: int | None = None
 ) -> TemplateAgeGroup | None:
     """Pick the AGEGROUP for a relay in `event`.  15-18/Open use their
     named bracket; Masters relays route by total-age-sum to the matching
-    bracket."""
+    age-sum bracket (amin >= 100), OR by the oldest member's individual
+    age if the event only has individual-style brackets (amin < 100,
+    e.g. Corde duo)."""
     if age_code == "1518":
         for a in event.agegroups:
             if a.amin == 15 and a.amax == 18:
@@ -1090,18 +1100,35 @@ def pick_agegroup_for_relay(
             if a.amin == 19 and (a.amax in (99, -1, None)):
                 return a
     elif age_code == "MASTERS":
-        if squad_age_sum is None:
-            return None
-        for a in event.agegroups:
-            if a.amin is None or a.amax is None:
-                continue
-            # skip 15-18 and 19-99 if present
-            if a.amin in (15, 19):
-                continue
-            lo = a.amin
-            hi = 10**9 if a.amax < 0 else a.amax
-            if lo <= squad_age_sum <= hi:
-                return a
+        # Determine if this event uses age-sum brackets (amin >= 100)
+        # or individual-style brackets (amin in 25..99).
+        has_agesum = any(a.amin is not None and a.amin >= 100
+                         for a in event.agegroups)
+        if has_agesum:
+            if squad_age_sum is None:
+                return None
+            for a in event.agegroups:
+                if a.amin is None or a.amax is None:
+                    continue
+                if a.amin in (15, 19):
+                    continue
+                lo = a.amin
+                hi = 10**9 if a.amax < 0 else a.amax
+                if lo <= squad_age_sum <= hi:
+                    return a
+        else:
+            # Individual-style brackets — route by oldest member's age
+            if oldest_age is None:
+                return None
+            for a in event.agegroups:
+                if a.amin is None or a.amax is None:
+                    continue
+                if a.amin in (15, 19):
+                    continue
+                lo = a.amin
+                hi = 10**9 if a.amax < 0 else a.amax
+                if lo <= oldest_age <= hi:
+                    return a
     return None
 
 
@@ -1139,21 +1166,110 @@ def main():
     athletes: dict[tuple, Inscription] = {}  # (norm first,last,license) -> record
     events_in_xlsx: dict[tuple, EventKey] = {}   # ek.key() -> EventKey
     ind_entries: list[tuple] = []       # (athlete_key, event_key, best_ms)
-    relay_groups: dict[tuple, list[tuple]] = defaultdict(list)
-    # relay_groups key: (club_norm, event_key) -> list[(athlete_key, best_ms)]
+    # relay_squads: (club_norm, event_key) -> list of squads
+    # each squad = list[(athlete_key, best_ms)]
+    relay_squads: dict[tuple, list[list[tuple]]] = defaultdict(list)
 
+    # First pass: collect all athletes so we can resolve teammate names
     for ins in inscriptions:
         club_norm = norm_key(ins.club)
         clubs.setdefault(club_norm, ins.club)
-
         ath_key = (norm_key(ins.first, ins.last), ins.license or "")
         if ath_key not in athletes:
             athletes[ath_key] = ins
         events_in_xlsx.setdefault(ins.event.key(), ins.event)
 
+    # Build name→athlete_key lookup (normalized full name → key)
+    name_to_key: dict[str, tuple] = {}
+    for akey, ins in athletes.items():
+        nk = norm_key(ins.first, ins.last)
+        name_to_key[nk] = akey
+
+    def _parse_teammates(raw: str | None) -> list[str]:
+        """Parse the teammates column into a list of normalized names.
+        Each line is 'First Last [NRAN] [extra text]'.  We strip trailing
+        tokens that don't look like name parts (all-uppercase, digits,
+        or common annotations)."""
+        if not raw:
+            return []
+        names = []
+        for line in raw.split("\n"):
+            line = line.strip()
+            if not line or re.match(r"^\(.*\)$", line):
+                continue
+            # Strip trailing tokens that look like NRAN or annotations.
+            # A token is "not a name part" if it's all-uppercase+digits,
+            # or matches common patterns like "72", "years", "old".
+            tokens = line.split()
+            while len(tokens) > 2:
+                last = tokens[-1]
+                if re.match(r"^[A-Z0-9]{3,8}$", last):
+                    tokens.pop()  # NRAN like "KIAXKJ", "YX4"
+                elif re.match(r"^\d+$", last):
+                    tokens.pop()  # bare number like "72"
+                elif last.lower() in ("years", "old", "ans"):
+                    tokens.pop()  # age annotation
+                else:
+                    break
+            names.append(norm_key(" ".join(tokens)))
+        return names
+
+    def _resolve_teammate(name_norm: str, club_norm: str) -> tuple | None:
+        """Resolve a teammate name to an athlete_key.  Tries exact match
+        first, then progressively strips trailing tokens (handles cases
+        where NRAN wasn't fully stripped)."""
+        if name_norm in name_to_key:
+            return name_to_key[name_norm]
+        # Try stripping trailing tokens
+        tokens = name_norm.split()
+        while len(tokens) > 2:
+            tokens.pop()
+            attempt = " ".join(tokens)
+            if attempt in name_to_key:
+                return name_to_key[attempt]
+        return None
+
+    # Second pass: build relay squads and individual entries
+    for ins in inscriptions:
+        club_norm = norm_key(ins.club)
+        ath_key = (norm_key(ins.first, ins.last), ins.license or "")
+
         if ins.event.is_relay:
-            relay_groups[(club_norm, ins.event.key())].append(
-                (ath_key, ins.best_time_ms))
+            # Build the full squad from registrant + teammates
+            squad: list[tuple] = [(ath_key, ins.best_time_ms)]
+            teammate_names = _parse_teammates(ins.teammates)
+            for tname in teammate_names:
+                tkey = _resolve_teammate(tname, club_norm)
+                if tkey is not None:
+                    t_ins = athletes[tkey]
+                    squad.append((tkey, t_ins.best_time_ms))
+                else:
+                    # Teammate not found in xlsx — create a placeholder
+                    # athlete entry so they can still be inserted
+                    parts = tname.split()
+                    if len(parts) >= 2:
+                        tfirst = " ".join(parts[:-1])
+                        tlast = parts[-1]
+                    else:
+                        tfirst = tname
+                        tlast = ""
+                    placeholder_key = (tname, "")
+                    if placeholder_key not in athletes:
+                        athletes[placeholder_key] = Inscription(
+                            first=tfirst.title(), last=tlast.title(),
+                            email=None, club=ins.club,
+                            birthdate=None, license=None,
+                            best_time_ms=None, event=ins.event)
+                        name_to_key[tname] = placeholder_key
+                    squad.append((placeholder_key, None))
+
+            # Deduplicate: same set of members = same squad
+            squad_sig = frozenset(k for k, _ in squad)
+            ekey = ins.event.key()
+            existing = relay_squads[(club_norm, ekey)]
+            if not any(frozenset(k for k, _ in s) == squad_sig
+                       for s in existing):
+                existing.append(squad)
         else:
             ind_entries.append((ath_key, ins.event.key(), ins.best_time_ms))
 
@@ -1163,7 +1279,8 @@ def main():
           f"(individual: {sum(1 for e in events_in_xlsx.values() if not e.is_relay)}, "
           f"relay: {sum(1 for e in events_in_xlsx.values() if e.is_relay)})")
     print(f"  individual entries: {len(ind_entries)}")
-    print(f"  relay squads:      {len(relay_groups)}")
+    relay_count = sum(len(squads) for squads in relay_squads.values())
+    print(f"  relay squads:      {relay_count}")
 
     # ----- open MDB + load template structure -----
     print(f"\nOpening {args.mdb}...")
@@ -1211,13 +1328,18 @@ def main():
                         f"Ticket {ev.label}: SWIMEVENT #{tevent.event_number} "
                         f"has no AGEGROUP for bracket {ev.age_code}")
             elif ev.age_code == "MASTERS":
-                # Age-sum brackets — just check we have at least one
-                ag = [a for a in tevent.agegroups
-                      if a.amin is not None and a.amin >= 100]
-                if not ag:
+                # Need either age-sum brackets (amin >= 100) for standard
+                # relays, or individual-style brackets (25 <= amin < 100)
+                # for duo relays like Corde.
+                has_agesum = any(a.amin is not None and a.amin >= 100
+                                 for a in tevent.agegroups)
+                has_individual = any(a.amin is not None
+                                     and 25 <= a.amin < 100
+                                     for a in tevent.agegroups)
+                if not has_agesum and not has_individual:
                     fatal.append(
                         f"Ticket {ev.label}: Masters relay but SWIMEVENT "
-                        f"#{tevent.event_number} has no age-sum AGEGROUP")
+                        f"#{tevent.event_number} has no Masters AGEGROUPs")
         else:
             # Individual: need an AGEGROUP matching this bracket type
             if ev.age_code == "1518":
@@ -1279,23 +1401,25 @@ def main():
                 f"{ins.first} {ins.last} age {age} too young for Masters (25+)")
 
     # Relay squads that are incomplete (fewer athletes than relay_count)
-    for (cnorm, ekey), members in relay_groups.items():
+    for (cnorm, ekey), squads in relay_squads.items():
         ev = events_in_xlsx[ekey]
         style = template.styles_by_uid[ev.uniqueid]
         need = style.relay_count or 4
-        leftovers = len(members) % need
-        if len(members) < need:
-            issues.warn(
-                "incomplete_relay",
-                f"{clubs[cnorm]}: {len(members)}/{need} athletes "
-                f"for UID {ev.uniqueid} ({ev.age_code})")
-        elif leftovers:
-            n_squads = (len(members) + need - 1) // need
-            issues.note(
-                "extra_relay_members",
-                f"{clubs[cnorm]}: {len(members)} athletes for "
-                f"UID {ev.uniqueid} ({ev.age_code}) — split into {n_squads} "
-                f"squads, the last one has only {leftovers}/{need}")
+        for squad in squads:
+            if len(squad) < need:
+                first_ath = athletes[squad[0][0]]
+                issues.warn(
+                    "incomplete_relay",
+                    f"{clubs[cnorm]}: {len(squad)}/{need} athletes "
+                    f"for UID {ev.uniqueid} ({ev.age_code}) "
+                    f"— registrant: {first_ath.first} {first_ath.last}")
+            elif len(squad) > need:
+                first_ath = athletes[squad[0][0]]
+                issues.note(
+                    "extra_relay_members",
+                    f"{clubs[cnorm]}: {len(squad)} athletes for "
+                    f"UID {ev.uniqueid} ({ev.age_code}) — need {need} "
+                    f"(registrant: {first_ath.first} {first_ath.last})")
 
     # Non-race-only clubs / athletes (informational)
     wb = openpyxl.load_workbook(args.xlsx, data_only=True)
@@ -1585,7 +1709,7 @@ def main():
     db.insert_many("SWIMRESULT", sr_batch)
 
     # ----- RELAY + RELAYPOSITION -----
-    for (cnorm, ekey), members in relay_groups.items():
+    for (cnorm, ekey), squads in relay_squads.items():
         ev = events_in_xlsx[ekey]
         tevent = template.find_event(
             ev.uniqueid, ev.gender, masters=(ev.age_code == "MASTERS"))
@@ -1594,19 +1718,14 @@ def main():
         club_id = club_ids[cnorm]
         event_id = tevent.swim_event_id
 
-        # Chunk into squads
-        chunks: list[list[tuple]] = []
-        buf: list[tuple] = []
-        for m in members:
-            buf.append(m)
-            if len(buf) == relay_size:
-                chunks.append(buf); buf = []
-        if buf:
-            chunks.append(buf)
+        for club_squad_idx, squad in enumerate(squads, start=1):
+            # Skip incomplete squads
+            if len(squad) < relay_size:
+                continue
 
-        for club_squad_idx, squad in enumerate(chunks, start=1):
             # Route by age-sum for Masters, by bracket label otherwise
             age_sum = None
+            oldest_age = None
             if ev.age_code == "MASTERS":
                 ages = [age_at(athletes[akey].birthdate)
                          for akey, _ in squad[:relay_size]]
@@ -1619,15 +1738,14 @@ def main():
                     stats["masters_skipped_no_dob"] += 1
                     continue
                 age_sum = sum(ages)
-            ag = pick_agegroup_for_relay(tevent, ev.age_code, age_sum)
+                oldest_age = max(ages)
+            ag = pick_agegroup_for_relay(tevent, ev.age_code, age_sum,
+                                         oldest_age=oldest_age)
             if ag is None:
-                # Incomplete squads are already flagged by the
-                # `incomplete_relay` warning above; don't double-report.
-                if len(squad) >= relay_size:
-                    issues.warn("relay_unroutable",
-                        f"{clubs[cnorm]} relay UID {ev.uniqueid} "
-                        f"({ev.age_code}) couldn't find an AGEGROUP "
-                        f"(age_sum={age_sum})")
+                issues.warn("relay_unroutable",
+                    f"{clubs[cnorm]} relay UID {ev.uniqueid} "
+                    f"({ev.age_code}) couldn't find an AGEGROUP "
+                    f"(age_sum={age_sum})")
                 continue
 
             stable_key = (club_id, event_id, club_squad_idx)
@@ -1655,8 +1773,7 @@ def main():
             next_team_no += 1
             rid = db.next_id()
             entry_time = None
-            if (all(bt is not None for _, bt in squad)
-                    and len(squad) >= relay_size):
+            if all(bt is not None for _, bt in squad[:relay_size]):
                 entry_time = sum(bt for _, bt in squad[:relay_size])
             db.insert("RELAY", {
                 "RELAYID":      rid,
