@@ -189,7 +189,7 @@ def main():
         "name": MEET_NAME, "city": MEET_CITY, "nation": MEET_NATION,
         "course": MEET_COURSE, "timing": "AUTOMATIC",
     })
-    ET.SubElement(meet, "AGEDATE", {"value": AGE_DATE.isoformat(), "type": "YEAR"})
+    ET.SubElement(meet, "AGEDATE", {"value": AGE_DATE.isoformat(), "type": "CAN.FNQ"})
     ET.SubElement(meet, "POOL", {"lanemin": "1", "lanemax": "8"})
 
     # Sessions + Events from template
@@ -293,6 +293,7 @@ def main():
                         continue
                     entry_attrs = {
                         "eventid": str(tevent.swim_event_id),
+                        "agegroupid": str(ag.agegroup_id),
                     }
                     et = ms_to_lenex(ms)
                     if et:
@@ -330,17 +331,25 @@ def main():
 
                     relay_name = "/".join(
                         athletes[ak].last for ak, _ in squad[:relay_size])
-                    rel_xml = ET.SubElement(relays_xml, "RELAY", {
+                    rel_attrs = {
                         "number": str(team_no),
                         "name": relay_name[:50],
                         "gender": lenex_gender(ev.gender),
-                    })
+                        "agemin": str(ag.amin if ag.amin is not None else -1),
+                        "agemax": str(ag.amax if ag.amax is not None else -1),
+                        "agetotalmin": str(age_sum if age_sum is not None else -1),
+                        "agetotalmax": str(age_sum if age_sum is not None else -1),
+                    }
+                    rel_xml = ET.SubElement(relays_xml, "RELAY", rel_attrs)
                     # Entry
                     entry_time = None
                     if all(bt is not None for _, bt in squad[:relay_size]):
                         entry_time = sum(bt for _, bt in squad[:relay_size])
                     ents_xml = ET.SubElement(rel_xml, "ENTRIES")
-                    entry_attrs = {"eventid": str(tevent.swim_event_id)}
+                    entry_attrs = {
+                        "eventid": str(tevent.swim_event_id),
+                        "agegroupid": str(ag.agegroup_id),
+                    }
                     et = ms_to_lenex(entry_time)
                     if et:
                         entry_attrs["entrytime"] = et
