@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Post-meet script: copy SWIMTIME from Masters athletes on non-Masters
 prelim events to their corresponding Masters timed-final event, then
-clear the prelim SWIMTIME so they don't appear in prelim results.
+delete the prelim SWIMRESULT row so they don't appear as DQ/NoShow in
+prelim results.
 
 Usage:
     python copy_prelim_to_masters_final.py --mdb meet.mdb [--dry-run]
@@ -16,7 +17,7 @@ Behaviour:
        a. Find (or create) the SWIMRESULT on the Masters final for the
           same athlete, in the matching 5-year bracket.
        b. Copy SWIMTIME (and REACTIONTIME, STATUS if present).
-       c. Clear SWIMTIME on the prelim row (set to NULL).
+       c. Delete the prelim SWIMRESULT row.
   4. Commit (or rollback if --dry-run).
 
 Idempotent: rows with NULL SWIMTIME on the prelim are skipped.
@@ -213,11 +214,9 @@ def main():
                       INT_MAX, INT_MAX])
                 total_created += 1
 
-            # Clear SWIMTIME on the prelim row
-            c.execute("""
-                UPDATE SWIMRESULT SET SWIMTIME=NULL, REACTIONTIME=-32768
-                WHERE SWIMRESULTID=?
-            """, [sr_id])
+            # Delete the prelim SWIMRESULT row entirely so the athlete
+            # doesn't appear as DQ/NoShow in prelim results.
+            c.execute("DELETE FROM SWIMRESULT WHERE SWIMRESULTID=?", [sr_id])
             total_copied += 1
 
         print(f"  event #{prelim_enum} (prelim eid={prelim_eid}) → "
@@ -235,7 +234,7 @@ def main():
     print(f"{'=' * 60}")
     print(f"  {total_copied} prelim time(s) copied to Masters final")
     print(f"  {total_created} new SWIMRESULT row(s) created on Masters final")
-    print(f"  {total_copied} prelim SWIMTIME(s) cleared")
+    print(f"  {total_copied} prelim row(s) deleted")
 
     if args.dry_run:
         conn.rollback()
