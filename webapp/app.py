@@ -228,6 +228,11 @@ def run_loader(mode: str,
                          compression=zipfile.ZIP_DEFLATED) as z:
         if result_file is not None and result_file.exists():
             z.write(result_file, arcname=result_file.name)
+        # Include the template mdb in lenex mode
+        if mode == "lenex":
+            mdb_in_staging = staging.dir / "template.mdb"
+            if mdb_in_staging.exists():
+                z.write(mdb_in_staging, arcname="template.mdb")
         z.writestr("issues.txt", issues_txt)
 
     parsed["download_name"] = _download_name(mode, xlsx_path.name)
