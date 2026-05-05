@@ -90,12 +90,21 @@ def main():
         ath_key = (norm_key(ins.first, ins.last), ins.license or "")
         if ath_key not in athletes:
             athletes[ath_key] = ins
+        else:
+            existing = athletes[ath_key]
+            if ins.birthdate and not existing.birthdate:
+                athletes[ath_key] = ins
         events_in_xlsx.setdefault(ins.event.key(), ins.event)
 
-    # Name lookup for teammate resolution
+    # Name lookup — prefer key with license
     name_to_key: dict[str, tuple] = {}
     for akey, ins in athletes.items():
-        name_to_key[norm_key(ins.first, ins.last)] = akey
+        nk = norm_key(ins.first, ins.last)
+        if nk in name_to_key:
+            if akey[1] and not name_to_key[nk][1]:
+                name_to_key[nk] = akey
+        else:
+            name_to_key[nk] = akey
 
     def _parse_teammates(raw):
         if not raw:
@@ -133,7 +142,8 @@ def main():
     # Second pass: build entries and relay squads
     for ins in inscriptions:
         club_norm = norm_key(ins.club)
-        ath_key = (norm_key(ins.first, ins.last), ins.license or "")
+        nk = norm_key(ins.first, ins.last)
+        ath_key = name_to_key.get(nk, (nk, ins.license or ""))
 
         if ins.event.is_relay:
             squad = [(ath_key, ins.best_time_ms)]
@@ -252,9 +262,10 @@ def main():
             "name": cname, "code": cname[:10], "nation": MEET_NATION,
         })
 
-        # Athletes in this club
+        # Athletes in this club (only canonical keys — no duplicates)
         club_aths = [(ak, a) for ak, a in athletes.items()
-                     if norm_key(a.club) == cnorm]
+                     if norm_key(a.club) == cnorm
+                     and name_to_key.get(norm_key(a.first, a.last)) == ak]
         if not club_aths:
             continue
 

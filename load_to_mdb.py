@@ -1184,13 +1184,40 @@ def main():
         ath_key = (norm_key(ins.first, ins.last), ins.license or "")
         if ath_key not in athletes:
             athletes[ath_key] = ins
+        else:
+            # Merge: prefer the record with more info (birthdate, license)
+            existing = athletes[ath_key]
+            if ins.birthdate and not existing.birthdate:
+                athletes[ath_key] = ins
         events_in_xlsx.setdefault(ins.event.key(), ins.event)
 
-    # Build name→athlete_key lookup (normalized full name → key)
+    # Merge athletes with same name but different license keys
+    # (same person registered with and without license on different rows)
     name_to_key: dict[str, tuple] = {}
     for akey, ins in athletes.items():
         nk = norm_key(ins.first, ins.last)
-        name_to_key[nk] = akey
+        if nk in name_to_key:
+            existing_key = name_to_key[nk]
+            # Prefer the key with a license
+            if akey[1] and not existing_key[1]:
+                name_to_key[nk] = akey
+        else:
+            name_to_key[nk] = akey
+
+    # Warn about athletes with multiple keys (same name, different license)
+    from collections import Counter as _Counter
+    _name_counts = _Counter()
+    for akey in athletes:
+        _name_counts[akey[0]] += 1
+    for nk, cnt in _name_counts.items():
+        if cnt > 1:
+            # Find the display name
+            for akey, ins in athletes.items():
+                if akey[0] == nk:
+                    issues.warn("duplicate_athlete_key",
+                        f"{ins.first} {ins.last}: {cnt} entries with "
+                        f"different license values — merged to one")
+                    break
 
     def _parse_teammates(raw: str | None) -> list[str]:
         """Parse the teammates column into a list of normalized names.
@@ -1239,7 +1266,9 @@ def main():
     # Second pass: build relay squads and individual entries
     for ins in inscriptions:
         club_norm = norm_key(ins.club)
-        ath_key = (norm_key(ins.first, ins.last), ins.license or "")
+        # Use the canonical key (prefer one with license)
+        nk = norm_key(ins.first, ins.last)
+        ath_key = name_to_key.get(nk, (nk, ins.license or ""))
 
         if ins.event.is_relay:
             # Build the full squad from registrant + teammates
