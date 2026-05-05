@@ -10,9 +10,11 @@
   <main>
     <h1>ebimport_splash</h1>
     <p class="lede">
-      Conversion d'un fichier Excel d'inscriptions en base SPLASH Meet Manager
-      (fichier <code>.mdb</code>) ou en fichier d'échange Lenex
-      (<code>.lxf</code>).
+      Ajout des inscriptions à une base SPLASH Meet Manager
+      (<code>.mdb</code>) à partir d'un fichier Excel Eventbrite.
+      La structure des épreuves (styles, événements, groupes d'âge,
+      sessions) doit déjà exister dans la base <code>.mdb</code> ;
+      l'outil ne fait qu'y ajouter les clubs, athlètes et entrées.
     </p>
 
     <form id="run-form">
@@ -34,13 +36,8 @@
         </label>
         <label>
           <input type="radio" name="mode" value="mdb">
-          <strong>Charger dans un <code>.mdb</code></strong>
+          <strong>Charger dans la base <code>.mdb</code></strong>
           — ajoute les inscriptions dans la base SPLASH fournie.
-        </label>
-        <label>
-          <input type="radio" name="mode" value="lenex">
-          <strong>Générer un <code>.lxf</code></strong>
-          — produit un fichier Lenex 3.0 zippé.
         </label>
       </fieldset>
 
@@ -48,11 +45,10 @@
         <legend>Fichier <code>.mdb</code> SPLASH <span class="req">*</span></legend>
         <label>
           Base <code>.mdb</code> (modèle ou en cours de remplissage) :
-          <input type="file" name="mdb" accept=".mdb">
+          <input type="file" name="mdb" accept=".mdb" required>
         </label>
         <p class="hint">
-          <strong>Requis pour les modes <em>Validation</em> et
-          <em>Charger dans un .mdb</em>.</strong>
+          <strong>Obligatoire.</strong>
           La structure des épreuves (styles, événements, groupes d'âge,
           sessions) est prise telle quelle depuis ce fichier — le
           chargeur n'ajoute que les clubs, athlètes et inscriptions.
@@ -100,8 +96,8 @@
           </a>
         </p>
         <p class="hint">
-          Le fichier contient le résultat (<code>.mdb</code> ou
-          <code>.lxf</code>) et un rapport texte des problèmes détectés.
+          Le fichier contient la base <code>.mdb</code> mise à jour
+          et un rapport texte des problèmes détectés.
           Le téléchargement nettoie le fichier côté serveur.
         </p>
       </section>

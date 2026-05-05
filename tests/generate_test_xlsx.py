@@ -2,7 +2,7 @@
 """
 generate_test_xlsx.py
 Build a deterministic, synthetic Attendees workbook that exercises every
-parser path and edge case in load_to_mdb.py / load_to_lenex.py.
+parser path and edge case in load_to_mdb.py.
 
 Run:
     python tests/generate_test_xlsx.py --out tests/test_attendees.xlsx

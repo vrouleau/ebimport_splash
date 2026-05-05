@@ -2,16 +2,11 @@
 
 Convert an Eventbrite/registration Excel workbook into inscriptions
 loaded against an existing **SPLASH Meet Manager 11** meet database.
-Two scripts are provided:
 
-- **`load_to_mdb.py`** — writes directly into a SPLASH `.mdb` file
-  (via Jackcess/UCanAccess over JDBC). Idempotent / re-runnable.
-- **`load_to_lenex.py`** — emits a Lenex 3.0 `.lef` (or zipped `.lxf`)
-  file that you can import into SPLASH Meet Manager or any other
-  Lenex-compatible tool.
-
-Both scripts read the **`Attendees`** sheet of a registration workbook
-(one row per athlete × ticket/event).
+**`load_to_mdb.py`** writes directly into a SPLASH `.mdb` file
+(via Jackcess/UCanAccess over JDBC).  It reads the **`Attendees`**
+sheet of a registration workbook (one row per athlete × ticket/event)
+and is idempotent — re-running on the same dataset is a no-op.
 
 ## How the MDB loader works
 
@@ -111,11 +106,6 @@ Requires Java 8+ on the `PATH`.
 # --- MDB: fresh load or additive update ---
 python load_to_mdb.py --xlsx CPLC2026FINAL.xlsx --mdb Canadien.mdb
 python load_to_mdb.py --xlsx CPLC2026FINAL.xlsx --mdb Canadien.mdb --dry-run
-python load_to_mdb.py --xlsx CPLC2026FINAL.xlsx --mdb Canadien.mdb --wipe
-
-# --- Lenex: produce a .lef or a zipped .lxf ---
-python load_to_lenex.py --xlsx CPLC2026FINAL.xlsx --out candien.lef
-python load_to_lenex.py --xlsx CPLC2026FINAL.xlsx --out candien.lxf --zip
 ```
 
 ### MDB flags
@@ -125,7 +115,6 @@ python load_to_lenex.py --xlsx CPLC2026FINAL.xlsx --out candien.lxf --zip
 | `--xlsx PATH` | Excel workbook with an `Attendees` sheet (required) |
 | `--mdb PATH` | Target `.mdb` file, will be modified in place (required) |
 | `--dry-run` | Parse and plan everything, then roll back — no writes |
-| `--wipe` | Delete existing clubs/athletes/events/entries before loading |
 
 ---
 
@@ -236,10 +225,10 @@ generated `.mdb` files (they may contain personal data).
 
 ## Web UI (Docker)
 
-A minimal Flask web app in `webapp/` wraps both loaders behind a
-single-page French UI.  Upload an xlsx, pick a mode (dry-run / MDB /
-Lenex), see summary + issues in the page, download a zip with the
-generated file + issues report.
+A minimal Flask web app in `webapp/` wraps the loader behind a
+single-page French UI.  Upload an xlsx, pick a mode (validation or
+write), see summary + issues in the page, download a zip with the
+updated `.mdb` + issues report.
 
 ### Build + run locally
 

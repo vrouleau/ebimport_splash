@@ -3,8 +3,8 @@
 # Build:   docker build -t ebimport-splash:latest .
 # Run:     docker run --rm -p 5000:5000 ebimport-splash:latest
 #
-# The resulting image wraps load_to_mdb.py / load_to_lenex.py behind
-# a tiny Flask + gunicorn web server.  No persistence: each upload
+# The resulting image wraps load_to_mdb.py behind a tiny
+# Flask + gunicorn web server.  No persistence: each upload
 # lives under /tmp/ebimport_staging/<uuid>/ and is cleaned up when
 # the download is streamed or after the 30-min TTL.
 
@@ -49,7 +49,7 @@ RUN mkdir -p /opt/ucanaccess \
 
 # App code (loaders + webapp)
 WORKDIR /app
-COPY load_to_mdb.py load_to_lenex.py ./
+COPY load_to_mdb.py ./
 COPY webapp ./webapp
 
 # Point the loader at the bundled UCanAccess jars

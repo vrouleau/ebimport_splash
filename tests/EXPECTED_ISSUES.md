@@ -3,7 +3,7 @@
 `test_attendees.xlsx` is a **deterministic** synthetic workbook produced
 by `generate_test_xlsx.py` (seeded RNG `20260504`). Each run should
 reproduce the same values. Use this file as the reference for manual
-regression of `load_to_mdb.py` and `load_to_lenex.py`.
+regression of `load_to_mdb.py`.
 
 Regenerate the xlsx any time with:
 
@@ -51,15 +51,11 @@ python tests/generate_test_xlsx.py --out tests/test_attendees.xlsx
   +6     new combined events (cumulatifs)
 ```
 
-(The Lenex script reports the same counts in its `Summary` section —
-expect `369 individual entries` and `69 relay member entries` because
-it counts the duplicate + the slower row before dedup.)
-
 ---
 
 ## Expected Issues section
 
-Both scripts should emit these exact categories on a fresh run (order
+The loader should emit these exact categories on a fresh run (order
 may vary, counts are stable):
 
 | Severity | Category | Count | Trigger |

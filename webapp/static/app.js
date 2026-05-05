@@ -5,7 +5,6 @@
   const form       = document.getElementById("run-form");
   const status     = document.getElementById("status");
   const goBtn      = document.getElementById("go");
-  const mdbOpts    = document.getElementById("mdb-opts");
   const results    = document.getElementById("results");
   const fatalBlock = document.getElementById("fatal-block");
   const fatalList  = document.getElementById("fatal-list");
@@ -17,17 +16,6 @@
   const dlLink     = document.getElementById("download-link");
   const rawBlock   = document.getElementById("raw-block");
   const rawOutput  = document.getElementById("raw-output");
-
-  // Only show the 'existing mdb' option when mode=mdb
-  function syncMdbOpts() {
-    const mode = (new FormData(form)).get("mode");
-    mdbOpts.style.display = (mode === "mdb" || mode === "dry-run")
-      ? "" : "none";
-  }
-  form.addEventListener("change", (ev) => {
-    if (ev.target.name === "mode") syncMdbOpts();
-  });
-  syncMdbOpts();
 
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
