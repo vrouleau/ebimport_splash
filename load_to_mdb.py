@@ -1635,6 +1635,11 @@ def main():
         inferred_gender.setdefault(k, e.event.gender)
 
     for akey, ins in athletes.items():
+        # Skip non-canonical keys (duplicates with different license)
+        nk = norm_key(ins.first, ins.last)
+        if name_to_key.get(nk) != akey:
+            # Map this key to the canonical athlete's ID (set later)
+            continue
         club_id = club_ids[norm_key(ins.club)]
         new_gender = inferred_gender.get(akey, GENDER_ALL)
         if akey in existing_athletes:
@@ -1683,6 +1688,14 @@ def main():
             "ATHLETEID": aid, "CLUBID": club_id,
             "GENDER": new_gender, "BIRTHDATE": ins.birthdate,
             "LICENSE": ins.license}
+
+    # Map non-canonical keys to the canonical athlete_id
+    for akey in athletes:
+        if akey not in athlete_ids:
+            nk = norm_key(athletes[akey].first, athletes[akey].last)
+            canonical = name_to_key.get(nk)
+            if canonical and canonical in athlete_ids:
+                athlete_ids[akey] = athlete_ids[canonical]
 
     # ----- SWIMRESULT (individual entries) -----
     # Dedup (athlete, ek) pairs, keeping fastest time
