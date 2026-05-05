@@ -1790,7 +1790,8 @@ def main():
                 "ENTRYTIME":    entry_time,
                 "ENTRYCOURSE":  0,
                 "RESULTSTATUS": 0,
-                "NAME":         truncate(f"{clubs[cnorm]} {club_squad_idx}", 100),
+                "NAME":         truncate("/".join(
+                    athletes[akey].last for akey, _ in squad[:relay_size]), 100),
                 "BONUSENTRY":   "F",
                 "DSQNOTIFIED":  "F",
                 "FINALFIX":     "F",
