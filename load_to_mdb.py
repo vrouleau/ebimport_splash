@@ -727,6 +727,13 @@ def read_attendees(xlsx_path: Path,
                 issues.warn("bad_birthdate",
                             f"{first} {last}: can't parse DOB {raw_dob!r}",
                             row=row_idx)
+        elif bd is not None and issues:
+            age = age_at(bd)
+            if age is not None and (age < 0 or age > 99):
+                issues.warn("bad_birthdate",
+                            f"{first} {last}: implausible age {age} "
+                            f"(DOB {bd.strftime('%Y-%m-%d')})",
+                            row=row_idx)
 
         # Name-length warnings (will be truncated for SPLASH columns)
         if len(str(first)) > 30 and issues:
@@ -1402,6 +1409,16 @@ def main():
             issues.warn("age_bracket_mismatch",
                 f"{ins.first} {ins.last} age {age} too young for Masters (25+)")
 
+    # Helper: infer athlete gender from their individual entries
+    athlete_gender_map: dict[tuple, int] = {}
+    for akey, ekey, _ in ind_entries:
+        ev = events_in_xlsx[ekey]
+        if not ev.is_relay and ev.gender in (GENDER_MALE, GENDER_FEMALE):
+            athlete_gender_map.setdefault(akey, ev.gender)
+
+    def _infer_gender(akey, ins):
+        return athlete_gender_map.get(akey)
+
     # Relay squads that are incomplete (fewer athletes than relay_count)
     for (cnorm, ekey), squads in relay_squads.items():
         ev = events_in_xlsx[ekey]
@@ -1422,6 +1439,27 @@ def main():
                     f"{clubs[cnorm]}: {len(squad)} athletes for "
                     f"UID {ev.uniqueid} ({ev.age_code}) — need {need} "
                     f"(registrant: {first_ath.first} {first_ath.last})")
+            # Check relay member ages and gender
+            for akey, _ in squad[:need]:
+                member = athletes[akey]
+                m_age = age_at(member.birthdate)
+                if m_age is not None:
+                    if ev.age_code == "1518" and not (15 <= m_age <= 18):
+                        issues.warn("relay_member_age",
+                            f"{member.first} {member.last} age {m_age} "
+                            f"invalid for 15-18 relay ({clubs[cnorm]})")
+                    elif ev.age_code == "OPEN" and m_age < 15:
+                        issues.warn("relay_member_age",
+                            f"{member.first} {member.last} age {m_age} "
+                            f"too young for Open relay ({clubs[cnorm]})")
+                if ev.gender in (GENDER_MALE, GENDER_FEMALE):
+                    # Gendered relay (Corde) — check member gender
+                    m_gender = _infer_gender(akey, member)
+                    if m_gender and m_gender != ev.gender:
+                        g_label = "M" if ev.gender == GENDER_MALE else "F"
+                        issues.warn("relay_member_gender",
+                            f"{member.first} {member.last} wrong gender "
+                            f"for {g_label} relay ({clubs[cnorm]})")
 
     # Non-race-only clubs / athletes (informational)
     wb = openpyxl.load_workbook(args.xlsx, data_only=True)
@@ -1482,7 +1520,7 @@ def main():
         "club_new": 0, "athlete_new": 0,
         "athlete_gender_fix": 0, "athlete_license_fix": 0,
         "athlete_birthdate_fix": 0, "athlete_club_fix": 0,
-        "entry_new": 0, "entry_dual": 0, "entry_time_faster": 0,
+        "entry_new": 0, "entry_time_faster": 0,
         "relay_new": 0, "relayposition_new": 0,
         "masters_skipped_no_dob": 0,
     }
@@ -1652,10 +1690,25 @@ def main():
     sr_batch: list[dict] = []
     for (akey, ekey), (cs, bd) in best_by.items():
         ev = events_in_xlsx[ekey]
-        tevent = template.find_event(
-            ev.uniqueid, ev.gender, masters=(ev.age_code == "MASTERS"))
-        # validation passed, so tevent is guaranteed
         athlete_age = age_at(bd)
+
+        # Masters individuals go to the non-Masters prelim (in a Masters
+        # bracket) so they swim alongside 15-18/Open.  The Masters final
+        # entry is created later by the "Transfert des temps" script.
+        if ev.age_code == "MASTERS":
+            prelim_ev = template.find_prelim_for_dual_entry(
+                ev.uniqueid, ev.gender)
+            if prelim_ev is not None:
+                tevent = prelim_ev
+            else:
+                # No prelim with Masters bracket — fall back to Masters final
+                tevent = template.find_event(
+                    ev.uniqueid, ev.gender, masters=True)
+        else:
+            tevent = template.find_event(
+                ev.uniqueid, ev.gender, masters=False)
+
+        # validation passed, so tevent is guaranteed
         ag = pick_agegroup_for_individual(tevent, ev.age_code, athlete_age)
         if ag is None:
             # Only possible for Masters with no DOB — warn and skip
@@ -1670,7 +1723,7 @@ def main():
         aid = athlete_ids[akey]
         eid = tevent.swim_event_id
 
-        # Primary entry (Masters final or non-Masters prelim)
+        # Primary entry
         if (aid, eid) in existing_results:
             _sr_id, cur_cs = existing_results[(aid, eid)]
             if cs is not None and (cur_cs is None or cs < cur_cs):
@@ -1682,31 +1735,6 @@ def main():
             sr_batch.append(_sr_row(sr_id, aid, eid, ag.agegroup_id, cs))
             stats["entry_new"] += 1
             existing_results[(aid, eid)] = (sr_id, cs)
-
-        # Dual-entry: Masters individual also swims in the non-Masters
-        # prelim if that event has a Masters-style bracket for their age.
-        if ev.age_code == "MASTERS" and athlete_age is not None:
-            prelim_ev = template.find_prelim_for_dual_entry(
-                ev.uniqueid, ev.gender)
-            if prelim_ev is not None:
-                prelim_ag = pick_agegroup_for_individual(
-                    prelim_ev, "MASTERS", athlete_age)
-                if prelim_ag is not None:
-                    prelim_eid = prelim_ev.swim_event_id
-                    if (aid, prelim_eid) in existing_results:
-                        _sr_id, cur_cs = existing_results[(aid, prelim_eid)]
-                        if cs is not None and (cur_cs is None or cs < cur_cs):
-                            db.update("SWIMRESULT",
-                                      {"SWIMRESULTID": _sr_id},
-                                      {"ENTRYTIME": cs})
-                            stats["entry_time_faster"] += 1
-                    else:
-                        sr_id = db.next_id()
-                        sr_batch.append(_sr_row(
-                            sr_id, aid, prelim_eid,
-                            prelim_ag.agegroup_id, cs))
-                        stats["entry_dual"] += 1
-                        existing_results[(aid, prelim_eid)] = (sr_id, cs)
 
     db.insert_many("SWIMRESULT", sr_batch)
 
@@ -1840,7 +1868,6 @@ def main():
     line("athlete birthdate fills",       stats["athlete_birthdate_fix"])
     line("athlete club changes",          stats["athlete_club_fix"])
     line("new individual entries",        stats["entry_new"])
-    line("dual entries (Masters→prelim)",  stats["entry_dual"])
     line("entries updated (faster time)", stats["entry_time_faster"])
     line("new relay squads",              stats["relay_new"])
     line("new relay positions",           stats["relayposition_new"])

@@ -44,7 +44,7 @@ def ms_to_lenex(ms: int | None) -> str:
     rem = rem % 60_000
     s = rem // 1000
     cs = (rem % 1000) // 10
-    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+    return f"{h:02d}:{m:02d}:{s:02d}.{cs:02d}"
 
 
 def lenex_gender(g: int) -> str:
@@ -281,9 +281,16 @@ def main():
                 entries_xml = ET.SubElement(ath_xml, "ENTRIES")
                 for ekey, ms in my_entries:
                     ev = events_in_xlsx[ekey]
-                    tevent = template.find_event(
-                        ev.uniqueid, ev.gender,
-                        masters=(ev.age_code == "MASTERS"))
+                    # Masters individuals go to prelim (Masters bracket)
+                    if ev.age_code == "MASTERS":
+                        tevent = template.find_prelim_for_dual_entry(
+                            ev.uniqueid, ev.gender)
+                        if tevent is None:
+                            tevent = template.find_event(
+                                ev.uniqueid, ev.gender, masters=True)
+                    else:
+                        tevent = template.find_event(
+                            ev.uniqueid, ev.gender, masters=False)
                     if tevent is None:
                         continue
                     athlete_age = age_at(ins.birthdate)
@@ -308,24 +315,17 @@ def main():
             relays_xml = ET.SubElement(club_xml, "RELAYS")
             for ekey, squads in club_relays:
                 ev = events_in_xlsx[ekey]
-                # For relays in Lenex, use the final event (ROUND=9 for
-                # non-Masters, ROUND=1 for Masters) — SPLASH imports
-                # relay entries into finals, not prelims.
+                # Route relays same as individuals: Masters go to prelim
+                # (Masters bracket), non-Masters go to prelim too.
                 if ev.age_code == "MASTERS":
-                    tevent = template.find_event(
-                        ev.uniqueid, ev.gender, masters=True)
-                else:
-                    # Find the ROUND=9 final for this relay
-                    candidates = template.events_by_uid_gender.get(
-                        (ev.uniqueid, ev.gender), [])
-                    tevent = None
-                    for e in candidates:
-                        if not e.masters and e.round == 9:
-                            tevent = e; break
+                    tevent = template.find_prelim_for_dual_entry(
+                        ev.uniqueid, ev.gender)
                     if tevent is None:
-                        # Fallback to timed final or prelim
                         tevent = template.find_event(
-                            ev.uniqueid, ev.gender, masters=False)
+                            ev.uniqueid, ev.gender, masters=True)
+                else:
+                    tevent = template.find_event(
+                        ev.uniqueid, ev.gender, masters=False)
                 if tevent is None:
                     continue
                 style = template.styles_by_uid[ev.uniqueid]
@@ -344,16 +344,38 @@ def main():
                     if ag is None:
                         continue
 
+                    # For Lenex relay import, SPLASH matches the relay's
+                    # agemin/agemax to an AGEGROUP on the event.  For
+                    # Masters relays on a prelim event, use the Open
+                    # bracket [19,99] so SPLASH accepts them.
+                    lenex_ag = ag
+                    if ev.age_code == "MASTERS" and not tevent.masters:
+                        # Find the [19,99] bracket on this prelim
+                        for a in tevent.agegroups:
+                            if a.amin == 19 and a.amax in (99, -1, None):
+                                lenex_ag = a; break
+
                     relay_name = "/".join(
                         athletes[ak].last for ak, _ in squad[:relay_size])
+                    if ev.age_code == "1518":
+                        rel_amin, rel_amax = 15, 18
+                        rel_totalmin, rel_totalmax = -1, -1
+                    elif ev.age_code == "OPEN" or (ev.age_code == "MASTERS" and not tevent.masters):
+                        rel_amin, rel_amax = 19, 99
+                        rel_totalmin, rel_totalmax = -1, -1
+                    else:
+                        # Masters relay on Masters final — age-sum brackets
+                        rel_amin, rel_amax = -1, -1
+                        rel_totalmin = ag.amin if ag.amin is not None else -1
+                        rel_totalmax = ag.amax if ag.amax is not None else -1
                     rel_attrs = {
                         "number": str(team_no),
                         "name": relay_name[:50],
                         "gender": lenex_gender(ev.gender),
-                        "agemin": str(ag.amin if ag.amin is not None else -1),
-                        "agemax": str(ag.amax if ag.amax is not None else -1),
-                        "agetotalmin": str(age_sum if age_sum is not None else -1),
-                        "agetotalmax": str(age_sum if age_sum is not None else -1),
+                        "agemin": str(rel_amin),
+                        "agemax": str(rel_amax),
+                        "agetotalmin": str(rel_totalmin),
+                        "agetotalmax": str(rel_totalmax),
                     }
                     rel_xml = ET.SubElement(relays_xml, "RELAY", rel_attrs)
                     # Entry
@@ -363,7 +385,7 @@ def main():
                     ents_xml = ET.SubElement(rel_xml, "ENTRIES")
                     entry_attrs = {
                         "eventid": str(tevent.swim_event_id),
-                        "agegroupid": str(ag.agegroup_id),
+                        "agegroupid": str(lenex_ag.agegroup_id),
                     }
                     et = ms_to_lenex(entry_time)
                     if et:

@@ -1,32 +1,24 @@
 #!/usr/bin/env python3
-"""Post-meet script: copy SWIMTIME from Masters athletes on non-Masters
-prelim events to their corresponding Masters timed-final event, then
-delete the prelim SWIMRESULT row so they don't appear as DQ/NoShow in
-prelim results.
+"""Post-prelim script: transfer Masters results from prelim to final.
+
+For each Masters athlete on a non-Masters prelim event (in a Masters
+age bracket) that has a SWIMTIME recorded:
+  1. Read the SWIMTIME (and REACTIONTIME, RESULTSTATUS)
+  2. Delete the prelim SWIMRESULT row
+  3. Create a SWIMRESULT on the corresponding Masters timed-final event
+     with that SWIMTIME, assigned to a HEAT and LANE (max 8 per heat)
 
 Usage:
     python copy_prelim_to_masters_final.py --mdb meet.mdb [--dry-run]
 
-Behaviour:
-  1. Scan all non-Masters prelim events (ROUND=2, MASTERS='F') for
-     age-group brackets with AGEMIN in [25..99] (Masters-style).
-  2. For each such event, find the matching Masters timed-final event
-     (same SWIMSTYLEID, same GENDER, MASTERS='T', ROUND=1).
-  3. For each SWIMRESULT on the prelim in a Masters bracket that has a
-     non-NULL SWIMTIME:
-       a. Find (or create) the SWIMRESULT on the Masters final for the
-          same athlete, in the matching 5-year bracket.
-       b. Copy SWIMTIME (and REACTIONTIME, STATUS if present).
-       c. Delete the prelim SWIMRESULT row.
-  4. Commit (or rollback if --dry-run).
-
-Idempotent: rows with NULL SWIMTIME on the prelim are skipped.
+Idempotent: rows without SWIMTIME are skipped.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
 import glob
+import math
 import os
 import sys
 
@@ -42,7 +34,6 @@ def connect(mdb_path: str):
     jars = (glob.glob(f"{ucanaccess_dir}/ucanaccess-*.jar") +
             glob.glob(f"{ucanaccess_dir}/lib/*.jar") +
             glob.glob(f"{ucanaccess_dir}/*.jar"))
-    # Deduplicate (flat layout vs nested layout)
     jars = list(dict.fromkeys(jars))
     return jaydebeapi.connect(
         "net.ucanaccess.jdbc.UcanaccessDriver",
@@ -71,11 +62,15 @@ def main():
     args = ap.parse_args()
 
     conn = connect(args.mdb)
-    conn.jconn.setAutoCommit(False)
+    if args.dry_run:
+        conn.jconn.setAutoCommit(False)
     c = conn.cursor()
 
-    # --- Build mapping: prelim events with Masters brackets ---
-    # (prelim_event_id, SWIMSTYLEID, GENDER) -> list of Masters age brackets
+    # Get BS_GLOBAL_UID
+    c.execute("SELECT LASTUID FROM BSUIDTABLE WHERE NAME='BS_GLOBAL_UID'")
+    next_uid = int(c.fetchone()[0]) + 1
+
+    # Find prelim events with Masters brackets
     c.execute("""
         SELECT e.SWIMEVENTID, e.SWIMSTYLEID, e.GENDER,
                a.AGEGROUPID, a.AGEMIN, a.AGEMAX
@@ -84,12 +79,12 @@ def main():
         WHERE e.ROUND = 2 AND e.MASTERS = 'F'
           AND a.AGEMIN >= 25 AND a.AGEMIN < 100
     """)
-    prelim_masters_brackets = {}  # (prelim_eid) -> [(agid, amin, amax)]
-    prelim_meta = {}  # prelim_eid -> (styid, gender)
+    prelim_masters_brackets = {}
+    prelim_meta = {}
     for eid, styid, gen, agid, amin, amax in c.fetchall():
         eid, styid, gen = int(eid), int(styid), int(gen)
-        agid, amin, amax = int(agid), int(amin), int(amax)
-        prelim_masters_brackets.setdefault(eid, []).append((agid, amin, amax))
+        prelim_masters_brackets.setdefault(eid, []).append(
+            (int(agid), int(amin), int(amax)))
         prelim_meta[eid] = (styid, gen)
 
     if not prelim_masters_brackets:
@@ -97,8 +92,7 @@ def main():
         conn.close()
         return
 
-    # --- Build mapping: Masters timed-final events ---
-    # (SWIMSTYLEID, GENDER) -> {event_id, agegroups: [(agid, amin, amax)]}
+    # Find Masters timed-final events
     c.execute("""
         SELECT e.SWIMEVENTID, e.SWIMSTYLEID, e.GENDER, e.EVENTNUMBER,
                a.AGEGROUPID, a.AGEMIN, a.AGEMAX
@@ -107,141 +101,176 @@ def main():
         WHERE e.ROUND = 1 AND e.MASTERS = 'T'
           AND a.AGEMIN >= 25 AND a.AGEMIN < 100
     """)
-    masters_finals = {}  # (styid, gender) -> {eid, brackets: [(agid, amin, amax)]}
+    masters_finals = {}
     for eid, styid, gen, enum, agid, amin, amax in c.fetchall():
-        eid, styid, gen = int(eid), int(styid), int(gen)
-        agid, amin, amax = int(agid), int(amin), int(amax)
-        key = (styid, gen)
+        key = (int(styid), int(gen))
         if key not in masters_finals:
-            masters_finals[key] = {"eid": eid, "enum": enum, "brackets": []}
-        masters_finals[key]["brackets"].append((agid, amin, amax))
+            masters_finals[key] = {"eid": int(eid), "enum": enum, "brackets": []}
+        masters_finals[key]["brackets"].append((int(agid), int(amin), int(amax)))
 
-    # --- Get BS_GLOBAL_UID for new row allocation ---
-    c.execute("SELECT LASTUID FROM BSUIDTABLE WHERE NAME='BS_GLOBAL_UID'")
-    next_uid = int(c.fetchone()[0]) + 1
-
-    # --- Process each prelim event ---
-    total_copied = 0
-    total_created = 0
+    # Collect all transfers grouped by final event
+    # transfers_by_final[final_eid] = [(ath_id, target_agid, swimtime, reaction, status, entrytime, prelim_srid)]
+    transfers_by_final: dict[int, list] = {}
+    prelim_rows_to_delete = []
 
     for prelim_eid, brackets in prelim_masters_brackets.items():
         styid, gender = prelim_meta[prelim_eid]
         final_info = masters_finals.get((styid, gender))
         if final_info is None:
-            print(f"  [SKIP] prelim eid={prelim_eid}: no Masters final "
-                  f"for (styid={styid}, gender={gender})")
             continue
 
         final_eid = final_info["eid"]
         final_brackets = final_info["brackets"]
 
-        # Get all SWIMRESULT rows on this prelim in Masters brackets
         ag_ids = [b[0] for b in brackets]
         placeholders = ",".join("?" * len(ag_ids))
         c.execute(f"""
             SELECT sr.SWIMRESULTID, sr.ATHLETEID, sr.AGEGROUPID,
                    sr.SWIMTIME, sr.REACTIONTIME, sr.RESULTSTATUS,
-                   ath.BIRTHDATE
+                   sr.ENTRYTIME, ath.BIRTHDATE
             FROM SWIMRESULT sr
             INNER JOIN ATHLETE ath ON ath.ATHLETEID = sr.ATHLETEID
             WHERE sr.SWIMEVENTID = ? AND sr.AGEGROUPID IN ({placeholders})
               AND sr.SWIMTIME IS NOT NULL AND sr.SWIMTIME > 0
         """, [prelim_eid] + ag_ids)
         rows = c.fetchall()
-
         if not rows:
             continue
 
-        # Get event number for reporting
         c.execute("SELECT EVENTNUMBER FROM SWIMEVENT WHERE SWIMEVENTID=?",
                   [prelim_eid])
         prelim_enum = c.fetchone()[0]
 
-        for sr_id, ath_id, ag_id, swimtime, reaction, status, birthdate in rows:
+        event_count = 0
+        for sr_id, ath_id, ag_id, swimtime, reaction, status, entrytime, birthdate in rows:
             sr_id, ath_id = int(sr_id), int(ath_id)
-            swimtime = int(swimtime) if swimtime is not None else None
+            swimtime = int(swimtime)
 
-            # Determine athlete age → find matching final bracket
             athlete_age = age_at(birthdate)
             if athlete_age is None:
                 continue
-
             target_agid = None
             for fagid, famin, famax in final_brackets:
-                hi = 10**9 if famax < 0 else famax
+                hi = 10**9 if (famax < 0 or famax >= 99) else famax
                 if famin <= athlete_age <= hi:
                     target_agid = fagid
                     break
             if target_agid is None:
                 continue
 
-            # Check if athlete already has a result on the Masters final
-            c.execute("""
-                SELECT SWIMRESULTID, SWIMTIME FROM SWIMRESULT
-                WHERE ATHLETEID=? AND SWIMEVENTID=?
-            """, [ath_id, final_eid])
+            transfers_by_final.setdefault(final_eid, []).append(
+                (ath_id, target_agid, swimtime, reaction, status, entrytime, sr_id))
+            prelim_rows_to_delete.append(sr_id)
+            event_count += 1
+
+        if event_count:
+            print(f"  prelim #{prelim_enum} → Masters final #{final_info['enum']}: "
+                  f"{event_count} athlete(s)")
+
+    if not transfers_by_final:
+        print("No Masters prelim results with SWIMTIME found.")
+        conn.close()
+        return
+
+    # Delete prelim rows FIRST
+    for sr_id in prelim_rows_to_delete:
+        c.execute("DELETE FROM SWIMRESULT WHERE SWIMRESULTID=?", [sr_id])
+
+    # Now process each final event: create heats and assign lanes
+    # Get pool lane configuration from the session
+    c.execute("SELECT LANEMIN, LANEMAX FROM SWIMSESSION FETCH FIRST 1 ROWS ONLY")
+    row = c.fetchone()
+    lane_min = int(row[0]) if row and row[0] else 1
+    lane_max = int(row[1]) if row and row[1] else 8
+    lanes_per_heat = lane_max - lane_min + 1
+
+    total_transferred = 0
+    total_heats = 0
+
+    for final_eid, athletes_data in transfers_by_final.items():
+        # Get existing max heat number for this event
+        c.execute("SELECT MAX(HEATNUMBER) FROM HEAT WHERE SWIMEVENTID=?",
+                  [final_eid])
+        row = c.fetchone()
+        max_heat = int(row[0]) if row[0] else 0
+
+        # Create heats (max lanes_per_heat athletes per heat)
+        n_heats_needed = math.ceil(len(athletes_data) / lanes_per_heat)
+
+        # Sort athletes by swimtime (fastest first) for seeding
+        athletes_data.sort(key=lambda x: x[2])
+
+        lane_idx = 0
+        current_heat_id = None
+        current_heat_num = max_heat
+
+        for ath_id, target_agid, swimtime, reaction, status, entrytime, prelim_srid in athletes_data:
+            # Need a new heat?
+            if lane_idx % lanes_per_heat == 0:
+                current_heat_num += 1
+                current_heat_id = next_uid; next_uid += 1
+                c.execute("""INSERT INTO HEAT
+                    (HEATID, SWIMEVENTID, HEATNUMBER, SORTCODE,
+                     AGEGROUPID, AGEGROUPORDER, RACESTATUS)
+                    VALUES (?, ?, ?, ?, 0, 0, 2)""",
+                    [current_heat_id, final_eid, current_heat_num, current_heat_num])
+                total_heats += 1
+                lane_idx = 0
+
+            lane = lane_min + lane_idx
+            lane_idx += 1
+
+            # Check if athlete already has a result on this final
+            c.execute("""SELECT SWIMRESULTID FROM SWIMRESULT
+                WHERE ATHLETEID=? AND SWIMEVENTID=?""", [ath_id, final_eid])
             existing = c.fetchone()
 
             if existing:
-                existing_srid = int(existing[0])
-                # Update with the prelim time
-                c.execute("""
-                    UPDATE SWIMRESULT SET SWIMTIME=?, REACTIONTIME=?,
-                           RESULTSTATUS=?
-                    WHERE SWIMRESULTID=?
-                """, [swimtime,
-                      reaction if reaction is not None else -32768,
-                      status if status is not None else 0,
-                      existing_srid])
+                c.execute("""UPDATE SWIMRESULT SET SWIMTIME=?, REACTIONTIME=?,
+                    RESULTSTATUS=?, HEATID=?, LANE=?
+                    WHERE SWIMRESULTID=?""",
+                    [swimtime,
+                     reaction if reaction is not None else -32768,
+                     status if status is not None else 0,
+                     current_heat_id, lane, int(existing[0])])
             else:
-                # Create a new SWIMRESULT on the Masters final
-                new_id = next_uid
-                next_uid += 1
-                c.execute("""
-                    INSERT INTO SWIMRESULT
+                new_id = next_uid; next_uid += 1
+                c.execute("""INSERT INTO SWIMRESULT
                     (SWIMRESULTID, ATHLETEID, SWIMEVENTID, AGEGROUPID,
                      ENTRYTIME, SWIMTIME, REACTIONTIME, RESULTSTATUS,
+                     HEATID, LANE,
                      ENTRYCOURSE, BONUSENTRY, DSQNOTIFIED, FINALFIX,
                      LATEENTRY, NOADVANCE, BACKUPTIME1, BACKUPTIME2,
                      BACKUPTIME3, FINISHJUDGE, PADTIME, QTCOURSE,
                      QTTIME, QTTIMING)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'F', 'F', 'F',
-                            'F', 'F', 0, 0, 0, 0, ?, 0, ?, 0)
-                """, [new_id, ath_id, final_eid, target_agid,
-                      swimtime, swimtime,
-                      reaction if reaction is not None else -32768,
-                      status if status is not None else 0,
-                      INT_MAX, INT_MAX])
-                total_created += 1
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            0, 'F', 'F', 'F', 'F', 'F', 0, 0, 0, 0, ?, 0, ?, 0)""",
+                    [new_id, ath_id, final_eid, target_agid,
+                     int(entrytime) if entrytime else swimtime,
+                     swimtime,
+                     reaction if reaction is not None else -32768,
+                     status if status is not None else 0,
+                     current_heat_id, lane,
+                     INT_MAX, INT_MAX])
 
-            # Delete the prelim SWIMRESULT row entirely so the athlete
-            # doesn't appear as DQ/NoShow in prelim results.
-            c.execute("DELETE FROM SWIMRESULT WHERE SWIMRESULTID=?", [sr_id])
-            total_copied += 1
+            total_transferred += 1
 
-        print(f"  event #{prelim_enum} (prelim eid={prelim_eid}) → "
-              f"Masters final eid={final_eid}: "
-              f"{len(rows)} time(s) transferred")
+    # Update UID counter
+    c.execute("UPDATE BSUIDTABLE SET LASTUID=? WHERE NAME='BS_GLOBAL_UID'",
+              [next_uid - 1])
 
-    # Update BS_GLOBAL_UID if we allocated new IDs
-    if total_created > 0:
-        c.execute("UPDATE BSUIDTABLE SET LASTUID=? WHERE NAME='BS_GLOBAL_UID'",
-                  [next_uid - 1])
-
-    # Summary
-    print(f"\n{'=' * 60}")
+    print(f"\n{'='*60}")
     print(f"  Summary")
-    print(f"{'=' * 60}")
-    print(f"  {total_copied} prelim time(s) copied to Masters final")
-    print(f"  {total_created} new SWIMRESULT row(s) created on Masters final")
-    print(f"  {total_copied} prelim row(s) deleted")
+    print(f"{'='*60}")
+    print(f"  {total_transferred} athlete(s) moved to Masters finals")
+    print(f"  {total_heats} heat(s) created")
+    print(f"  {len(prelim_rows_to_delete)} prelim row(s) deleted")
 
     if args.dry_run:
         conn.rollback()
-        print("\n  [DRY-RUN] — rolled back, no changes written.")
+        print(f"\n  [DRY-RUN] — rolled back, no changes written.")
     else:
-        conn.commit()
-        print("\n  Changes committed.")
+        print(f"\n  Changes committed.")
 
     conn.close()
 
