@@ -142,6 +142,8 @@ def main():
             for tname in _parse_teammates(ins.teammates):
                 tkey = _resolve_teammate(tname)
                 if tkey is not None:
+                    if tkey == ath_key:
+                        continue  # registrant listed themselves in teammates
                     squad.append((tkey, athletes[tkey].best_time_ms))
                 else:
                     parts = tname.split()

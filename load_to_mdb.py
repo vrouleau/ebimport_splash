@@ -1241,6 +1241,8 @@ def main():
             for tname in teammate_names:
                 tkey = _resolve_teammate(tname, club_norm)
                 if tkey is not None:
+                    if tkey == ath_key:
+                        continue  # registrant listed themselves in teammates
                     t_ins = athletes[tkey]
                     squad.append((tkey, t_ins.best_time_ms))
                 else:
