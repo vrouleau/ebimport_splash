@@ -39,6 +39,11 @@
           <strong>Charger dans la base <code>.mdb</code></strong>
           — ajoute les inscriptions dans la base SPLASH fournie.
         </label>
+        <label>
+          <input type="radio" name="mode" value="lenex">
+          <strong>Générer un fichier Lenex (<code>.lxf</code>)</strong>
+          — produit un fichier d'inscriptions importable dans SPLASH.
+        </label>
       </fieldset>
 
       <fieldset id="mdb-opts">
@@ -97,7 +102,8 @@
         </p>
         <p class="hint">
           Le fichier contient la base <code>.mdb</code> mise à jour
-          et un rapport texte des problèmes détectés.
+          (ou le fichier <code>.lxf</code> Lenex) et un rapport texte
+          des problèmes détectés.
           Le téléchargement nettoie le fichier côté serveur.
         </p>
       </section>

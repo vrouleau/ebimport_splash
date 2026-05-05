@@ -34,6 +34,7 @@ from flask import (
 APP_DIR     = Path(__file__).parent.resolve()
 REPO_ROOT   = APP_DIR.parent
 MDB_LOADER  = REPO_ROOT / "load_to_mdb.py"
+LNX_LOADER  = REPO_ROOT / "load_to_lenex.py"
 COPY_SCRIPT = REPO_ROOT / "copy_prelim_to_masters_final.py"
 
 STAGING_DIR = Path(os.environ.get("STAGING_DIR", "/tmp/ebimport_staging"))
@@ -172,10 +173,9 @@ def run_loader(mode: str,
                xlsx_path: Path,
                staging: Staging,
                user_mdb: Path) -> dict:
-    """Run the MDB loader and return parsed output plus the modified
-    .mdb file (or None if validation-only / fatal).
+    """Run the appropriate loader and return parsed output.
 
-    mode: 'dry-run' | 'mdb'
+    mode: 'dry-run' | 'mdb' | 'lenex'
     user_mdb must always be provided — it supplies the meet's event
     structure, which the loader treats as authoritative.
     """
@@ -184,21 +184,27 @@ def run_loader(mode: str,
 
     result_file: Path | None = None
 
-    if mode not in ("dry-run", "mdb"):
-        raise ValueError(f"unknown mode: {mode!r}")
-
-    # Copy the user-supplied MDB into the staging dir so we can return
-    # the modified copy as the download.  The supplied .mdb is always
-    # authoritative — we never use a built-in one.
-    out_mdb = staging.dir / "meet.mdb"
-    shutil.copy(user_mdb, out_mdb)
-    cmd = [sys.executable, str(MDB_LOADER),
-           "--xlsx", str(xlsx_path),
-           "--mdb", str(out_mdb)]
-    if mode == "dry-run":
-        cmd.append("--dry-run")
+    if mode in ("dry-run", "mdb"):
+        out_mdb = staging.dir / "meet.mdb"
+        shutil.copy(user_mdb, out_mdb)
+        cmd = [sys.executable, str(MDB_LOADER),
+               "--xlsx", str(xlsx_path),
+               "--mdb", str(out_mdb)]
+        if mode == "dry-run":
+            cmd.append("--dry-run")
+        else:
+            result_file = out_mdb
+    elif mode == "lenex":
+        out_lxf = staging.dir / "meet.lxf"
+        mdb_copy = staging.dir / "template.mdb"
+        shutil.copy(user_mdb, mdb_copy)
+        cmd = [sys.executable, str(LNX_LOADER),
+               "--xlsx", str(xlsx_path),
+               "--mdb", str(mdb_copy),
+               "--out", str(out_lxf)]
+        result_file = out_lxf
     else:
-        result_file = out_mdb
+        raise ValueError(f"unknown mode: {mode!r}")
 
     completed = subprocess.run(
         cmd, capture_output=True, text=True, env=env,
@@ -274,7 +280,7 @@ def _render_issues_text(parsed: dict, xlsx_name: str) -> str:
 
 def _download_name(mode: str, xlsx_name: str) -> str:
     base = Path(xlsx_name).stem or "meet"
-    suffix = {"dry-run": "dry-run", "mdb": "mdb"}[mode]
+    suffix = {"dry-run": "dry-run", "mdb": "mdb", "lenex": "lenex"}[mode]
     return f"{base}-{suffix}.zip"
 
 
@@ -291,7 +297,7 @@ def index():
 def api_run():
     _gc_stagings()
     mode = request.form.get("mode", "dry-run")
-    if mode not in ("dry-run", "mdb"):
+    if mode not in ("dry-run", "mdb", "lenex"):
         return jsonify({"error": f"mode invalide: {mode!r}"}), 400
 
     xlsx = request.files.get("xlsx")
