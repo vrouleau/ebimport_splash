@@ -649,6 +649,148 @@ class IssueCollector:
             out_file.write(block + "\n")
 
 
+# --------------------------------------------------------------------------- #
+# JotForm matrix format reader
+# --------------------------------------------------------------------------- #
+# Maps JotForm matrix [Row] labels to TICKET_UID style names
+_JOTFORM_STYLE_MAP = {
+    "Obstacle": "Obstacle",
+    "Remorquage": "Remorquage",
+    "Portage (100m)": "Portage",
+    "Portage50 (50m)": "Portage50",
+    "Sauveteur d'acier": "Sauveteur d'acier",
+    "Medley": "Medley",
+    "Corde": "Corde",
+    "Relais Mixte Obstacle": "Obstacle",
+    "Relais Mixte Portage": "Portage",
+    "Relais Mixte Medley": "Medley",
+}
+
+# Maps JotForm [Col] labels to (age_code, gender)
+_JOTFORM_CAT_MAP = {
+    "15-18 M": ("1518", GENDER_MALE),
+    "15-18 F": ("1518", GENDER_FEMALE),
+    "Open M": ("OPEN", GENDER_MALE),
+    "Open F": ("OPEN", GENDER_FEMALE),
+    "Open": ("OPEN", GENDER_MIXED),
+    "MA M": ("MASTERS", GENDER_MALE),
+    "MA F": ("MASTERS", GENDER_FEMALE),
+}
+
+# Relay row labels
+_JOTFORM_RELAY_ROWS = {"Relais Mixte Obstacle", "Relais Mixte Portage",
+                       "Relais Mixte Medley", "Corde"}
+
+
+def _read_jotform(wb, ws, header: list[str],
+                  issues: IssueCollector | None) -> list[Inscription]:
+    """Parse a JotForm matrix-style export into Inscription records."""
+    # Find column indices for standard fields
+    def _find_col(keywords):
+        for i, h in enumerate(header):
+            hl = h.lower()
+            if all(k in hl for k in keywords):
+                return i
+        return None
+
+    i_first = _find_col(["first"])
+    i_last = _find_col(["last"])
+    i_email = _find_col(["courriel"]) or _find_col(["email"])
+    i_club = _find_col(["club"])
+    i_dob = _find_col(["naissance"]) or _find_col(["date"])
+    i_nran = _find_col(["nran"])
+    i_team = _find_col(["coéquipier"]) or _find_col(["teammate"])
+
+    # Parse matrix columns: header contains "[Row][Col]"
+    # Build mapping: col_index -> (style_name, age_code, gender, is_relay)
+    matrix_cols: dict[int, tuple] = {}
+    _re_matrix = re.compile(r"\[([^\]]+)\]\[([^\]]+)\]$")
+    _re_matrix_single = re.compile(r"\[([^\]]+)\]$")
+    for i, h in enumerate(header):
+        m = _re_matrix.search(h)
+        if m:
+            row_label, col_label = m.group(1), m.group(2)
+        else:
+            m2 = _re_matrix_single.search(h)
+            if m2:
+                # Single bracket = single column matrix (e.g., relays with one "Open" col)
+                row_label = m2.group(1)
+                col_label = "Open"
+            else:
+                continue
+
+        style = _JOTFORM_STYLE_MAP.get(row_label)
+        cat = _JOTFORM_CAT_MAP.get(col_label)
+        if style is None or cat is None:
+            continue
+        age_code, gender = cat
+        is_relay = row_label in _JOTFORM_RELAY_ROWS
+        # For Corde, it's a relay (duo)
+        if row_label == "Corde":
+            is_relay = True
+
+        # Look up the TICKET_UID
+        if is_relay and row_label != "Corde":
+            uid = TICKET_UID.get((style, True, False))
+        elif row_label == "Corde":
+            uid = TICKET_UID.get(("Corde", True, False))
+        elif age_code == "MASTERS" and style == "Obstacle":
+            uid = TICKET_UID.get(("Obstacle", False, True))
+        else:
+            uid = TICKET_UID.get((style, False, False))
+
+        if uid is None:
+            continue
+        matrix_cols[i] = (style, age_code, gender, is_relay, uid)
+
+    out: list[Inscription] = []
+    for row_idx, r in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        if not r:
+            continue
+        first = r[i_first] if i_first is not None else None
+        last = r[i_last] if i_last is not None else None
+        if not first or not last:
+            continue
+
+        first = str(first).strip()
+        last = str(last).strip()
+        email = str(r[i_email]).strip() if i_email is not None and r[i_email] else None
+        club = str(r[i_club]).strip() if i_club is not None and r[i_club] else "Unattached"
+        raw_dob = r[i_dob] if i_dob is not None else None
+        bd = parse_birthdate(raw_dob)
+        if raw_dob and bd is None and issues:
+            issues.warn("bad_birthdate",
+                        f"{first} {last}: can't parse DOB {raw_dob!r}",
+                        row=row_idx)
+        license_val = str(r[i_nran]).strip() if i_nran is not None and r[i_nran] else None
+        teammates = str(r[i_team]).strip() if i_team is not None and r[i_team] else None
+
+        # Expand matrix cells into individual Inscription records
+        for col_i, (style, age_code, gender, is_relay, uid) in matrix_cols.items():
+            cell = r[col_i] if col_i < len(r) else None
+            if cell is None or str(cell).strip() == "":
+                continue
+            raw_time = str(cell).strip()
+            best_ms = parse_best_time(raw_time)
+            if raw_time.lower() not in ("nt", "n/a", "na", "-") and best_ms is None:
+                if issues:
+                    issues.warn("bad_time",
+                                f"{first} {last} {style}/{age_code}: "
+                                f"can't parse time {raw_time!r}",
+                                row=row_idx)
+
+            ev = EventKey(age_code=age_code, gender=gender,
+                          uniqueid=uid, is_relay=is_relay)
+            out.append(Inscription(
+                first=first, last=last, email=email, club=club,
+                birthdate=bd, license=license_val,
+                best_time_ms=best_ms, event=ev,
+                teammates=teammates if is_relay else None,
+            ))
+
+    return out
+
+
 def read_attendees(xlsx_path: Path,
                    issues: IssueCollector | None = None) -> list[Inscription]:
     """Parse the Attendees sheet into a list of Inscription records.
@@ -659,6 +801,14 @@ def read_attendees(xlsx_path: Path,
     reported into it.
     """
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+
+    # Detect format: JotForm matrix has "[" in column headers
+    ws = wb.active if "Attendees" not in wb.sheetnames else wb["Attendees"]
+    header = [str(c or "") for c in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
+    if any("[" in h and "]" in h for h in header):
+        return _read_jotform(wb, ws, header, issues)
+
+    # Eventbrite format — requires "Attendees" sheet
     if "Attendees" not in wb.sheetnames:
         raise SystemExit(f"Sheet 'Attendees' not found in {xlsx_path}")
     ws = wb["Attendees"]
@@ -1281,32 +1431,37 @@ def main():
 
     # Non-race-only clubs / athletes (informational)
     wb = openpyxl.load_workbook(args.xlsx, data_only=True)
-    ws_all = wb["Attendees"]
-    rows_all = list(ws_all.iter_rows(values_only=True))
-    hdr = [str(c or "").strip() for c in rows_all[0]]
-    i_f  = hdr.index("First Name")
-    i_l  = hdr.index("Last Name")
-    i_cl = hdr.index("Club")
-    all_clubs: set[str] = set()
-    all_names: set[str] = set()
-    for r in rows_all[1:]:
-        if not r or not r[i_f] or not r[i_l]:
-            continue
-        all_clubs.add(norm_key(r[i_cl] or "Unattached"))
-        all_names.add(norm_key(r[i_f], r[i_l]))
-    race_names = {akey[0] for akey in athletes.keys()}
-    race_clubs = set(clubs.keys())
-    n_club_skipped = len(all_clubs - race_clubs)
-    n_ath_skipped = len(all_names - race_names)
-    if n_club_skipped:
-        issues.note("non_race_only_club",
-                    f"{n_club_skipped} club(s) appear only on non-race "
-                    f"tickets (Banquet/Coach/Officiel/…) — not imported")
-    if n_ath_skipped:
-        issues.note("non_race_only_athlete",
-                    f"{n_ath_skipped} attendee(s) only bought non-race "
-                    f"tickets (supporters, coaches, officials, hotel) "
-                    f"— not imported as athletes")
+    if "Attendees" not in wb.sheetnames:
+        # JotForm format — skip non-race-only detection
+        wb.close()
+    else:
+        ws_all = wb["Attendees"]
+        rows_all = list(ws_all.iter_rows(values_only=True))
+        hdr = [str(c or "").strip() for c in rows_all[0]]
+        i_f  = hdr.index("First Name")
+        i_l  = hdr.index("Last Name")
+        i_cl = hdr.index("Club")
+        all_clubs: set[str] = set()
+        all_names: set[str] = set()
+        for r in rows_all[1:]:
+            if not r or not r[i_f] or not r[i_l]:
+                continue
+            all_clubs.add(norm_key(r[i_cl] or "Unattached"))
+            all_names.add(norm_key(r[i_f], r[i_l]))
+        race_names = {akey[0] for akey in athletes.keys()}
+        race_clubs = set(clubs.keys())
+        n_club_skipped = len(all_clubs - race_clubs)
+        n_ath_skipped = len(all_names - race_names)
+        if n_club_skipped:
+            issues.note("non_race_only_club",
+                        f"{n_club_skipped} club(s) appear only on non-race "
+                        f"tickets (Banquet/Coach/Officiel/…) — not imported")
+        if n_ath_skipped:
+            issues.note("non_race_only_athlete",
+                        f"{n_ath_skipped} attendee(s) only bought non-race "
+                        f"tickets (supporters, coaches, officials, hotel) "
+                        f"— not imported as athletes")
+        wb.close()
 
     # ----- Fuzzy duplicate detection (clubs + athletes) -----
     club_row_counts: dict[str, int] = defaultdict(int)

@@ -1,0 +1,133 @@
+{
+  "properties": {
+    "title": "Inscription — Invitation Laval 2026",
+    "height": "600",
+    "activeRedirect": "thanktext",
+    "thanktext": "Merci! L'inscription a été enregistrée.",
+    "language": "fr"
+  },
+  "questions": {
+    "1": {
+      "type": "control_head",
+      "text": "Inscription — Invitation Laval 2026",
+      "subHeader": "Un formulaire par athlète. Entrez le meilleur temps pour chaque épreuve à laquelle l'athlète participe. Laissez vide si non inscrit, entrez NT si pas de temps.",
+      "order": "1",
+      "name": "header"
+    },
+    "2": {
+      "type": "control_fullname",
+      "text": "Nom de l'athlète",
+      "order": "2",
+      "name": "athleteName",
+      "required": "Yes",
+      "prefix": "No",
+      "middle": "No",
+      "suffix": "No"
+    },
+    "3": {
+      "type": "control_email",
+      "text": "Courriel (coach ou athlète)",
+      "order": "3",
+      "name": "courriel",
+      "required": "Yes"
+    },
+    "4": {
+      "type": "control_dropdown",
+      "text": "Club",
+      "order": "4",
+      "name": "club",
+      "required": "Yes",
+      "options": "Aurora Lifesaving Club|Blue Natation|CAEM|CAF|CSRN|Calgary Winter Club Tsunamis|Club de sauvetage Mont-Tremblant|Club de sauvetage sportif de Gatineau|Cochrane Water Ninjas|Damoclès|Essex Swim & Lifesaving Club|Georgina Rapids Aquatic Club|Hawkesbury Silver Dolphins|Lifesaving Club of Markham|Maple Tulips Lifesaving Club|Maraudeurs|Narval sauvetage sportif|Nova Scotia Lifeguard Service|PSA|RHLC|Rouge Valley Lifesaving Club (RVLC)|Rouville SurfClub|Rouville Surfclub|Royal City Aquatics|Saugeen Shores Lifesaving Club|Surf Central|USA|Vaughan Lifesaving Club",
+      "allowOther": "Yes"
+    },
+    "5": {
+      "type": "control_datetime",
+      "text": "Date de naissance",
+      "order": "5",
+      "name": "dateNaissance",
+      "required": "Yes",
+      "format": "ddmmyyyy",
+      "showMonthNames": "No",
+      "timeInput": "No"
+    },
+    "6": {
+      "type": "control_textbox",
+      "text": "NRAN",
+      "order": "6",
+      "name": "nran",
+      "required": "No",
+      "hint": "Ex: KESA56"
+    },
+    "7": {
+      "type": "control_divider",
+      "text": "Épreuves individuelles",
+      "order": "7",
+      "name": "divider1"
+    },
+    "8": {
+      "type": "control_matrix",
+      "text": "Épreuves individuelles — Meilleur temps (M:SS.hh ou NT)",
+      "order": "8",
+      "name": "epreuvesIndividuelles",
+      "required": "No",
+      "inputType": "Text",
+      "mrows": "Obstacle|Remorquage|Portage (100m)|Portage50 (50m)|Sauveteur d'acier|Medley",
+      "mcolumns": "15-18 M|15-18 F|Open M|Open F|MA M|MA F"
+    },
+    "9": {
+      "type": "control_divider",
+      "text": "Relais",
+      "order": "9",
+      "name": "divider2"
+    },
+    "10": {
+      "type": "control_matrix",
+      "text": "Relais mixtes — Meilleur temps (M:SS.hh ou NT)",
+      "order": "10",
+      "name": "relaisMixtes",
+      "required": "No",
+      "inputType": "Text",
+      "mrows": "Relais Mixte Obstacle|Relais Mixte Portage|Relais Mixte Medley",
+      "mcolumns": "Open"
+    },
+    "11": {
+      "type": "control_matrix",
+      "text": "Corde (duo) — Meilleur temps (M:SS.hh ou NT)",
+      "order": "11",
+      "name": "corde",
+      "required": "No",
+      "inputType": "Text",
+      "mrows": "Corde",
+      "mcolumns": "Open M|Open F|MA M|MA F"
+    },
+    "12": {
+      "type": "control_textarea",
+      "text": "Coéquipier(s) + NRAN (un par ligne, pour les relais)",
+      "order": "12",
+      "name": "coequipiers",
+      "required": "No",
+      "hint": "Ex:\nJean Tremblay TRJ4X5\nMarie Lavoie LAM8P2"
+    },
+    "13": {
+      "type": "control_divider",
+      "text": "Autres",
+      "order": "13",
+      "name": "divider3"
+    },
+    "14": {
+      "type": "control_checkbox",
+      "text": "Autres inscriptions",
+      "order": "14",
+      "name": "autres",
+      "required": "No",
+      "options": "Banquet|Coach|Officiel"
+    },
+    "15": {
+      "type": "control_button",
+      "text": "Soumettre",
+      "order": "15",
+      "name": "submit",
+      "buttonAlign": "auto"
+    }
+  }
+}
