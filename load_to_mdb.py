@@ -554,7 +554,8 @@ def parse_birthdate(val: Any) -> dt.datetime | None:
     s = str(val).strip()
     if not s:
         return None
-    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y"):
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y",
+                "%B %d, %Y", "%b %d, %Y", "%d %B %Y"):
         try:
             return dt.datetime.strptime(s, fmt)
         except ValueError:
@@ -652,7 +653,7 @@ class IssueCollector:
 # --------------------------------------------------------------------------- #
 # JotForm matrix format reader
 # --------------------------------------------------------------------------- #
-# Maps JotForm matrix [Row] labels to TICKET_UID style names
+# Maps JotForm matrix row labels to TICKET_UID style names
 _JOTFORM_STYLE_MAP = {
     "Obstacle": "Obstacle",
     "Remorquage": "Remorquage",
@@ -695,29 +696,40 @@ def _read_jotform(wb, ws, header: list[str],
 
     i_first = _find_col(["first"])
     i_last = _find_col(["last"])
+    # JotForm may export full name as single column
+    i_fullname = None
+    if i_first is None or i_last is None:
+        i_fullname = _find_col(["nom"]) or _find_col(["name"])
+        if i_fullname is None:
+            i_fullname = _find_col(["athlète"]) or _find_col(["athlete"])
     i_email = _find_col(["courriel"]) or _find_col(["email"])
     i_club = _find_col(["club"])
-    i_dob = _find_col(["naissance"]) or _find_col(["date"])
+    i_dob = _find_col(["naissance"]) or _find_col(["birth"])
     i_nran = _find_col(["nran"])
     i_team = _find_col(["coéquipier"]) or _find_col(["teammate"])
 
-    # Parse matrix columns: header contains "[Row][Col]"
+    # Parse matrix columns: header contains "[Row][Col]" or ">> Row >> Col"
     # Build mapping: col_index -> (style_name, age_code, gender, is_relay)
     matrix_cols: dict[int, tuple] = {}
     _re_matrix = re.compile(r"\[([^\]]+)\]\[([^\]]+)\]$")
     _re_matrix_single = re.compile(r"\[([^\]]+)\]$")
+    _re_matrix_gg = re.compile(r">>\s*([^>]+?)\s*>>\s*([^>]+?)\s*$")
     for i, h in enumerate(header):
+        row_label = col_label = None
         m = _re_matrix.search(h)
         if m:
-            row_label, col_label = m.group(1), m.group(2)
+            row_label, col_label = m.group(1).strip(), m.group(2).strip()
         else:
-            m2 = _re_matrix_single.search(h)
-            if m2:
-                # Single bracket = single column matrix (e.g., relays with one "Open" col)
-                row_label = m2.group(1)
-                col_label = "Open"
+            m = _re_matrix_gg.search(h)
+            if m:
+                row_label, col_label = m.group(1).strip(), m.group(2).strip()
             else:
-                continue
+                m2 = _re_matrix_single.search(h)
+                if m2:
+                    row_label = m2.group(1).strip()
+                    col_label = "Open"
+        if row_label is None:
+            continue
 
         style = _JOTFORM_STYLE_MAP.get(row_label)
         cat = _JOTFORM_CAT_MAP.get(col_label)
@@ -747,13 +759,19 @@ def _read_jotform(wb, ws, header: list[str],
     for row_idx, r in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         if not r:
             continue
-        first = r[i_first] if i_first is not None else None
-        last = r[i_last] if i_last is not None else None
-        if not first or not last:
+        # Parse name
+        if i_fullname is not None:
+            fullname = str(r[i_fullname] or "").strip() if i_fullname < len(r) else ""
+            if not fullname:
+                continue
+            parts = fullname.rsplit(" ", 1)
+            first = parts[0] if len(parts) > 1 else fullname
+            last = parts[1] if len(parts) > 1 else ""
+        else:
+            first = str(r[i_first] or "").strip() if i_first is not None and i_first < len(r) else ""
+            last = str(r[i_last] or "").strip() if i_last is not None and i_last < len(r) else ""
+        if not first and not last:
             continue
-
-        first = str(first).strip()
-        last = str(last).strip()
         email = str(r[i_email]).strip() if i_email is not None and r[i_email] else None
         club = str(r[i_club]).strip() if i_club is not None and r[i_club] else "Unattached"
         raw_dob = r[i_dob] if i_dob is not None else None
@@ -802,10 +820,10 @@ def read_attendees(xlsx_path: Path,
     """
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
 
-    # Detect format: JotForm matrix has "[" in column headers
+    # Detect format: JotForm matrix has "[" or ">>" in column headers
     ws = wb.active if "Attendees" not in wb.sheetnames else wb["Attendees"]
     header = [str(c or "") for c in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
-    if any("[" in h and "]" in h for h in header):
+    if any(("[" in h and "]" in h) or (">>" in h) for h in header):
         return _read_jotform(wb, ws, header, issues)
 
     # Eventbrite format — requires "Attendees" sheet
