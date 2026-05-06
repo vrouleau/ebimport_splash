@@ -58,9 +58,9 @@ UCANACCESS_DIR = os.environ.get(
 MEET_NATION = "CAN"
 # Age reference date used when routing Masters entries to 5-year brackets
 # and when computing the sum-of-ages for Masters relays.  The
-# Default age date — overridden at runtime from BSGLOBAL.MEETVALUES.AGEDATE
-# if available in the template MDB.
-AGE_DATE = dt.date(2026, 12, 31)
+# Age date — read at runtime from BSGLOBAL.MEETVALUES.AGEDATE in the
+# template MDB.  Initialized to None; TemplateIndex.__init__ sets it.
+AGE_DATE: dt.date | None = None
 
 # SPLASH/Lenex gender encoding in SMALLINT columns.
 GENDER_MALE   = 1
@@ -245,9 +245,13 @@ def upper_key(s: str | None, n: int) -> str | None:
 
 
 def age_at(birthdate: dt.datetime | dt.date | None,
-           ref: dt.date = AGE_DATE) -> int | None:
+           ref: dt.date | None = None) -> int | None:
     """Age in whole years at `ref`, or None if no birthdate."""
     if birthdate is None:
+        return None
+    if ref is None:
+        ref = AGE_DATE
+    if ref is None:
         return None
     bd = birthdate.date() if isinstance(birthdate, dt.datetime) else birthdate
     years = ref.year - bd.year
