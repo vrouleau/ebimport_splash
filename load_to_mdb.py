@@ -1033,6 +1033,11 @@ class TemplateIndex:
                                    int(m.group(1)[4:6]),
                                    int(m.group(1)[6:8]))
                 break
+        # Also set on the module by name (handles __main__ vs import)
+        import sys
+        mod = sys.modules.get("load_to_mdb")
+        if mod is not None and mod is not sys.modules.get(__name__):
+            mod.AGE_DATE = AGE_DATE
 
     @property
     def is_first_run(self) -> bool:
@@ -1186,147 +1191,14 @@ def main():
     print(f"  {len(inscriptions)} race inscriptions extracted")
 
     # Aggregate
-    clubs: dict[str, str] = {}          # norm_name -> display name
-    athletes: dict[tuple, Inscription] = {}  # (norm first,last,license) -> record
-    events_in_xlsx: dict[tuple, EventKey] = {}   # ek.key() -> EventKey
-    ind_entries: list[tuple] = []       # (athlete_key, event_key, best_ms)
-    # relay_squads: (club_norm, event_key) -> list of squads
-    # each squad = list[(athlete_key, best_ms)]
-    relay_squads: dict[tuple, list[list[tuple]]] = defaultdict(list)
-
-    # First pass: collect all athletes so we can resolve teammate names
-    for ins in inscriptions:
-        club_norm = norm_key(ins.club)
-        clubs.setdefault(club_norm, ins.club)
-        ath_key = (norm_key(ins.first, ins.last), ins.license or "")
-        if ath_key not in athletes:
-            athletes[ath_key] = ins
-        else:
-            # Merge: prefer the record with more info (birthdate, license)
-            existing = athletes[ath_key]
-            if ins.birthdate and not existing.birthdate:
-                athletes[ath_key] = ins
-        events_in_xlsx.setdefault(ins.event.key(), ins.event)
-
-    # Merge athletes with same name but different license keys
-    # (same person registered with and without license on different rows)
-    name_to_key: dict[str, tuple] = {}
-    for akey, ins in athletes.items():
-        nk = norm_key(ins.first, ins.last)
-        if nk in name_to_key:
-            existing_key = name_to_key[nk]
-            # Prefer the key with a license
-            if akey[1] and not existing_key[1]:
-                name_to_key[nk] = akey
-        else:
-            name_to_key[nk] = akey
-
-    # Warn about athletes with multiple keys (same name, different license)
-    from collections import Counter as _Counter
-    _name_counts = _Counter()
-    for akey in athletes:
-        _name_counts[akey[0]] += 1
-    for nk, cnt in _name_counts.items():
-        if cnt > 1:
-            # Find the display name
-            for akey, ins in athletes.items():
-                if akey[0] == nk:
-                    issues.warn("duplicate_athlete_key",
-                        f"{ins.first} {ins.last}: {cnt} entries with "
-                        f"different license values — merged to one")
-                    break
-
-    def _parse_teammates(raw: str | None) -> list[str]:
-        """Parse the teammates column into a list of normalized names.
-        Each line is 'First Last [NRAN] [extra text]'.  We strip trailing
-        tokens that don't look like name parts (all-uppercase, digits,
-        or common annotations)."""
-        if not raw:
-            return []
-        names = []
-        for line in raw.split("\n"):
-            line = line.strip()
-            if not line or re.match(r"^\(.*\)$", line):
-                continue
-            # Strip trailing tokens that look like NRAN or annotations.
-            # A token is "not a name part" if it's all-uppercase+digits,
-            # or matches common patterns like "72", "years", "old".
-            tokens = line.split()
-            while len(tokens) > 2:
-                last = tokens[-1]
-                if re.match(r"^[A-Z0-9]{3,8}$", last):
-                    tokens.pop()  # NRAN like "KIAXKJ", "YX4"
-                elif re.match(r"^\d+$", last):
-                    tokens.pop()  # bare number like "72"
-                elif last.lower() in ("years", "old", "ans"):
-                    tokens.pop()  # age annotation
-                else:
-                    break
-            names.append(norm_key(" ".join(tokens)))
-        return names
-
-    def _resolve_teammate(name_norm: str, club_norm: str) -> tuple | None:
-        """Resolve a teammate name to an athlete_key.  Tries exact match
-        first, then progressively strips trailing tokens (handles cases
-        where NRAN wasn't fully stripped)."""
-        if name_norm in name_to_key:
-            return name_to_key[name_norm]
-        # Try stripping trailing tokens
-        tokens = name_norm.split()
-        while len(tokens) > 2:
-            tokens.pop()
-            attempt = " ".join(tokens)
-            if attempt in name_to_key:
-                return name_to_key[attempt]
-        return None
-
-    # Second pass: build relay squads and individual entries
-    for ins in inscriptions:
-        club_norm = norm_key(ins.club)
-        # Use the canonical key (prefer one with license)
-        nk = norm_key(ins.first, ins.last)
-        ath_key = name_to_key.get(nk, (nk, ins.license or ""))
-
-        if ins.event.is_relay:
-            # Build the full squad from registrant + teammates
-            squad: list[tuple] = [(ath_key, ins.best_time_ms)]
-            teammate_names = _parse_teammates(ins.teammates)
-            for tname in teammate_names:
-                tkey = _resolve_teammate(tname, club_norm)
-                if tkey is not None:
-                    if tkey == ath_key:
-                        continue  # registrant listed themselves in teammates
-                    t_ins = athletes[tkey]
-                    squad.append((tkey, t_ins.best_time_ms))
-                else:
-                    # Teammate not found in xlsx — create a placeholder
-                    # athlete entry so they can still be inserted
-                    parts = tname.split()
-                    if len(parts) >= 2:
-                        tfirst = " ".join(parts[:-1])
-                        tlast = parts[-1]
-                    else:
-                        tfirst = tname
-                        tlast = ""
-                    placeholder_key = (tname, "")
-                    if placeholder_key not in athletes:
-                        athletes[placeholder_key] = Inscription(
-                            first=tfirst.title(), last=tlast.title(),
-                            email=None, club=ins.club,
-                            birthdate=None, license=None,
-                            best_time_ms=None, event=ins.event)
-                        name_to_key[tname] = placeholder_key
-                    squad.append((placeholder_key, None))
-
-            # Deduplicate: same set of members = same squad
-            squad_sig = frozenset(k for k, _ in squad)
-            ekey = ins.event.key()
-            existing = relay_squads[(club_norm, ekey)]
-            if not any(frozenset(k for k, _ in s) == squad_sig
-                       for s in existing):
-                existing.append(squad)
-        else:
-            ind_entries.append((ath_key, ins.event.key(), ins.best_time_ms))
+    from common import aggregate, run_sanity_checks, run_validation, run_cross_row_checks
+    data = aggregate(inscriptions, issues)
+    clubs = data.clubs
+    athletes = data.athletes
+    name_to_key = data.name_to_key
+    events_in_xlsx = data.events_in_xlsx
+    ind_entries = data.ind_entries
+    relay_squads = data.relay_squads
 
     print(f"  distinct clubs:    {len(clubs)}")
     print(f"  distinct athletes: {len(athletes)}")
@@ -1350,15 +1222,10 @@ def main():
           f"{n_events_in_template} SWIMEVENTs")
 
     # Sanity check: all TICKET_UID values must exist in the template
-    missing_uids = [uid for uid in set(TICKET_UID.values())
-                    if uid not in template.styles_by_uid]
-    if missing_uids:
-        print(f"\n  FATAL: TICKET_UID references UIDs not in template "
-              f"SWIMSTYLE: {sorted(missing_uids)}")
-        print(f"  The template.mdb may have been modified or is incompatible.")
-        sys.exit(2)
-    if AGE_DATE is None:
-        print(f"\n  FATAL: could not read AGEDATE from BSGLOBAL.MEETVALUES")
+    sanity_errors = run_sanity_checks(template)
+    if sanity_errors:
+        for e in sanity_errors:
+            print(f"\n  FATAL: {e}")
         sys.exit(2)
     if template.is_first_run:
         print(f"  no inscriptions in template — FIRST RUN")
@@ -1368,68 +1235,7 @@ def main():
     # ========================================================== #
     # VALIDATION PASS — no writes before this succeeds            #
     # ========================================================== #
-    fatal: list[str] = []
-    # For each distinct EventKey in the xlsx, check that the template has
-    # a matching SWIMEVENT + (for individuals) that the required age
-    # bracket exists.
-    for ek, ev in events_in_xlsx.items():
-        style = template.styles_by_uid.get(ev.uniqueid)
-        if style is None:
-            fatal.append(
-                f"Ticket {ev.label}: template has no SWIMSTYLE "
-                f"with UNIQUEID={ev.uniqueid}")
-            continue
-        tevent = template.find_event(ev.uniqueid, ev.gender,
-                                      masters=(ev.age_code == "MASTERS"))
-        if tevent is None:
-            fatal.append(
-                f"Ticket {ev.label}: template has SWIMSTYLE for "
-                f"UID {ev.uniqueid} but no SWIMEVENT with gender={ev.gender} "
-                f"matching age code {ev.age_code!r}")
-            continue
-        if ev.is_relay:
-            # Confirm the event has at least one AGEGROUP of the right kind
-            if ev.age_code == "1518" or ev.age_code == "OPEN":
-                need_min = 15 if ev.age_code == "1518" else 19
-                if not any(a.amin == need_min for a in tevent.agegroups):
-                    fatal.append(
-                        f"Ticket {ev.label}: SWIMEVENT #{tevent.event_number} "
-                        f"has no AGEGROUP for bracket {ev.age_code}")
-            elif ev.age_code == "MASTERS":
-                # Need either age-sum brackets (amin >= 100) for standard
-                # relays, or individual-style brackets (25 <= amin < 100)
-                # for duo relays like Corde.
-                has_agesum = any(a.amin is not None and a.amin >= 100
-                                 for a in tevent.agegroups)
-                has_individual = any(a.amin is not None
-                                     and 25 <= a.amin < 100
-                                     for a in tevent.agegroups)
-                if not has_agesum and not has_individual:
-                    fatal.append(
-                        f"Ticket {ev.label}: Masters relay but SWIMEVENT "
-                        f"#{tevent.event_number} has no Masters AGEGROUPs")
-        else:
-            # Individual: need an AGEGROUP matching this bracket type
-            if ev.age_code == "1518":
-                if not any(a.amin == 15 and a.amax == 18
-                            for a in tevent.agegroups):
-                    fatal.append(
-                        f"Ticket {ev.label}: SWIMEVENT #{tevent.event_number} "
-                        f"has no 15-18 AGEGROUP")
-            elif ev.age_code == "OPEN":
-                if not any(a.amin == 19 for a in tevent.agegroups):
-                    fatal.append(
-                        f"Ticket {ev.label}: SWIMEVENT #{tevent.event_number} "
-                        f"has no 19+ AGEGROUP")
-            elif ev.age_code == "MASTERS":
-                masters_ag = [a for a in tevent.agegroups
-                              if a.amin is not None
-                              and a.amin >= 25 and a.amin < 100]
-                if not masters_ag:
-                    fatal.append(
-                        f"Ticket {ev.label}: Masters individual but "
-                        f"SWIMEVENT #{tevent.event_number} has no 5-year "
-                        f"Masters AGEGROUPs")
+    fatal = run_validation(events_in_xlsx, template)
 
     if fatal:
         print("\n" + "=" * 60)
@@ -1444,29 +1250,7 @@ def main():
         sys.exit(2)
 
     # ----- Cross-row data-quality checks (warnings only) -----
-    for akey, ins in athletes.items():
-        if ins.birthdate is None:
-            issues.warn(
-                "no_dob",
-                f"{ins.first} {ins.last} ({ins.club}) has no birthdate")
-
-    # Individual inscription age sanity-check
-    for ins in inscriptions:
-        if ins.event.is_relay:
-            continue
-        age = age_at(ins.birthdate)
-        if age is None:
-            continue
-        ac = ins.event.age_code
-        if ac == "1518" and not (15 <= age <= 18):
-            issues.warn("age_bracket_mismatch",
-                f"{ins.first} {ins.last} age {age} outside 15-18 bracket")
-        elif ac == "OPEN" and age < 19:
-            issues.warn("age_bracket_mismatch",
-                f"{ins.first} {ins.last} age {age} too young for Open (19+)")
-        elif ac == "MASTERS" and age < 25:
-            issues.warn("age_bracket_mismatch",
-                f"{ins.first} {ins.last} age {age} too young for Masters (25+)")
+    run_cross_row_checks(data, template, issues)
 
     # Helper: infer athlete gender from their individual entries
     athlete_gender_map: dict[tuple, int] = {}
@@ -1478,47 +1262,22 @@ def main():
     def _infer_gender(akey, ins):
         return athlete_gender_map.get(akey)
 
-    # Relay squads that are incomplete (fewer athletes than relay_count)
+    # Gendered relay member gender check
     for (cnorm, ekey), squads in relay_squads.items():
         ev = events_in_xlsx[ekey]
+        if ev.gender not in (GENDER_MALE, GENDER_FEMALE):
+            continue
         style = template.styles_by_uid[ev.uniqueid]
         need = style.relay_count or 4
         for squad in squads:
-            if len(squad) < need:
-                first_ath = athletes[squad[0][0]]
-                issues.warn(
-                    "incomplete_relay",
-                    f"{clubs[cnorm]}: {len(squad)}/{need} athletes "
-                    f"for UID {ev.uniqueid} ({ev.age_code}) "
-                    f"— registrant: {first_ath.first} {first_ath.last}")
-            elif len(squad) > need:
-                first_ath = athletes[squad[0][0]]
-                issues.note(
-                    "extra_relay_members",
-                    f"{clubs[cnorm]}: {len(squad)} athletes for "
-                    f"UID {ev.uniqueid} ({ev.age_code}) — need {need} "
-                    f"(registrant: {first_ath.first} {first_ath.last})")
-            # Check relay member ages and gender
             for akey, _ in squad[:need]:
                 member = athletes[akey]
-                m_age = age_at(member.birthdate)
-                if m_age is not None:
-                    if ev.age_code == "1518" and not (15 <= m_age <= 18):
-                        issues.warn("relay_member_age",
-                            f"{member.first} {member.last} age {m_age} "
-                            f"invalid for 15-18 relay ({clubs[cnorm]})")
-                    elif ev.age_code == "OPEN" and m_age < 15:
-                        issues.warn("relay_member_age",
-                            f"{member.first} {member.last} age {m_age} "
-                            f"too young for Open relay ({clubs[cnorm]})")
-                if ev.gender in (GENDER_MALE, GENDER_FEMALE):
-                    # Gendered relay (Corde) — check member gender
-                    m_gender = _infer_gender(akey, member)
-                    if m_gender and m_gender != ev.gender:
-                        g_label = "M" if ev.gender == GENDER_MALE else "F"
-                        issues.warn("relay_member_gender",
-                            f"{member.first} {member.last} wrong gender "
-                            f"for {g_label} relay ({clubs[cnorm]})")
+                m_gender = _infer_gender(akey, member)
+                if m_gender and m_gender != ev.gender:
+                    g_label = "M" if ev.gender == GENDER_MALE else "F"
+                    issues.warn("relay_member_gender",
+                        f"{member.first} {member.last} wrong gender "
+                        f"for {g_label} relay ({clubs[cnorm]})")
 
     # Non-race-only clubs / athletes (informational)
     wb = openpyxl.load_workbook(args.xlsx, data_only=True)

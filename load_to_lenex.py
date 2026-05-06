@@ -22,8 +22,9 @@ from load_to_mdb import (
     read_attendees, IssueCollector, TemplateIndex, MDB,
     pick_agegroup_for_individual, pick_agegroup_for_relay,
     norm_key, age_at, EventKey, Inscription,
-    AGE_DATE, GENDER_MALE, GENDER_FEMALE, GENDER_MIXED,
+    GENDER_MALE, GENDER_FEMALE, GENDER_MIXED,
 )
+from common import aggregate, run_sanity_checks, run_validation, run_cross_row_checks
 from collections import defaultdict
 import re
 
@@ -76,103 +77,36 @@ def main():
     db = MDB(args.mdb, dry_run=True)
     template = TemplateIndex(db)
 
-    # --- Aggregate (same logic as load_to_mdb.py) ---
-    clubs: dict[str, str] = {}
-    athletes: dict[tuple, Inscription] = {}
-    events_in_xlsx: dict[tuple, EventKey] = {}
-    ind_entries: list[tuple] = []
-    relay_squads: dict[tuple, list[list[tuple]]] = defaultdict(list)
+    # Sanity checks
+    import load_to_mdb
+    sanity_errors = run_sanity_checks(template)
+    if sanity_errors:
+        for e in sanity_errors:
+            print(f"  FATAL: {e}")
+        sys.exit(2)
 
-    # First pass: collect athletes
-    for ins in inscriptions:
-        club_norm = norm_key(ins.club)
-        clubs.setdefault(club_norm, ins.club)
-        ath_key = (norm_key(ins.first, ins.last), ins.license or "")
-        if ath_key not in athletes:
-            athletes[ath_key] = ins
-        else:
-            existing = athletes[ath_key]
-            if ins.birthdate and not existing.birthdate:
-                athletes[ath_key] = ins
-        events_in_xlsx.setdefault(ins.event.key(), ins.event)
+    AGE_DATE = load_to_mdb.AGE_DATE
 
-    # Name lookup — prefer key with license
-    name_to_key: dict[str, tuple] = {}
-    for akey, ins in athletes.items():
-        nk = norm_key(ins.first, ins.last)
-        if nk in name_to_key:
-            if akey[1] and not name_to_key[nk][1]:
-                name_to_key[nk] = akey
-        else:
-            name_to_key[nk] = akey
+    # Aggregate
+    data = aggregate(inscriptions, issues)
+    clubs = data.clubs
+    athletes = data.athletes
+    name_to_key = data.name_to_key
+    events_in_xlsx = data.events_in_xlsx
+    ind_entries = data.ind_entries
+    relay_squads = data.relay_squads
 
-    def _parse_teammates(raw):
-        if not raw:
-            return []
-        names = []
-        for line in raw.split("\n"):
-            line = line.strip()
-            if not line or re.match(r"^\(.*\)$", line):
-                continue
-            tokens = line.split()
-            while len(tokens) > 2:
-                last = tokens[-1]
-                if re.match(r"^[A-Z0-9]{3,8}$", last):
-                    tokens.pop()
-                elif re.match(r"^\d+$", last):
-                    tokens.pop()
-                elif last.lower() in ("years", "old", "ans"):
-                    tokens.pop()
-                else:
-                    break
-            names.append(norm_key(" ".join(tokens)))
-        return names
+    # Validation
+    fatal = run_validation(events_in_xlsx, template)
+    if fatal:
+        print("\n  FATAL: template/xlsx mismatch")
+        for f in fatal:
+            print(f"  - {f}")
+        db.close()
+        sys.exit(2)
 
-    def _resolve_teammate(name_norm):
-        if name_norm in name_to_key:
-            return name_to_key[name_norm]
-        tokens = name_norm.split()
-        while len(tokens) > 2:
-            tokens.pop()
-            attempt = " ".join(tokens)
-            if attempt in name_to_key:
-                return name_to_key[attempt]
-        return None
-
-    # Second pass: build entries and relay squads
-    for ins in inscriptions:
-        club_norm = norm_key(ins.club)
-        nk = norm_key(ins.first, ins.last)
-        ath_key = name_to_key.get(nk, (nk, ins.license or ""))
-
-        if ins.event.is_relay:
-            squad = [(ath_key, ins.best_time_ms)]
-            for tname in _parse_teammates(ins.teammates):
-                tkey = _resolve_teammate(tname)
-                if tkey is not None:
-                    if tkey == ath_key:
-                        continue  # registrant listed themselves in teammates
-                    squad.append((tkey, athletes[tkey].best_time_ms))
-                else:
-                    parts = tname.split()
-                    tfirst = " ".join(parts[:-1]) if len(parts) >= 2 else tname
-                    tlast = parts[-1] if len(parts) >= 2 else ""
-                    pkey = (tname, "")
-                    if pkey not in athletes:
-                        athletes[pkey] = Inscription(
-                            first=tfirst.title(), last=tlast.title(),
-                            email=None, club=ins.club, birthdate=None,
-                            license=None, best_time_ms=None, event=ins.event)
-                        name_to_key[tname] = pkey
-                    squad.append((pkey, None))
-
-            squad_sig = frozenset(k for k, _ in squad)
-            ekey = ins.event.key()
-            existing = relay_squads[(club_norm, ekey)]
-            if not any(frozenset(k for k, _ in s) == squad_sig for s in existing):
-                existing.append(squad)
-        else:
-            ind_entries.append((ath_key, ins.event.key(), ins.best_time_ms))
+    # Cross-row checks
+    run_cross_row_checks(data, template, issues)
 
     # Dedup individual entries (keep best time)
     best_by: dict[tuple, int | None] = {}
@@ -431,6 +365,8 @@ def main():
     else:
         out_path.write_text(xml_str, encoding="utf-8")
         print(f"  Written: {out_path}")
+
+    issues.report("Issues found while generating Lenex")
 
 
 if __name__ == "__main__":
