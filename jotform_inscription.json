@@ -61,73 +61,63 @@
     "7": {
       "type": "control_divider",
       "text": "Épreuves individuelles",
-      "order": "7",
+      "order": "8",
       "name": "divider1"
     },
     "8": {
       "type": "control_matrix",
-      "text": "Épreuves individuelles — Meilleur temps (M:SS.hh ou NT)",
-      "order": "8",
+      "text": "Épreuves individuelles",
+      "order": "9",
       "name": "epreuvesIndividuelles",
       "required": "No",
-      "inputType": "Text",
+      "inputType": "Mixed",
       "mrows": "Obstacle|Remorquage|Portage (100m)|Portage50 (50m)|Sauveteur d'acier|Medley",
-      "mcolumns": "15-18 M|15-18 F|Open M|Open F|MA M|MA F"
+      "mcolumns": "Catégorie|Meilleur temps (M:SS.hh ou NT)",
+      "columnTypes": "Drop Down|Text",
+      "columnOptions": "15-18;Open;MA|"
     },
     "9": {
       "type": "control_divider",
       "text": "Relais",
-      "order": "9",
+      "order": "10",
       "name": "divider2"
     },
     "10": {
       "type": "control_matrix",
-      "text": "Relais mixtes — Meilleur temps (M:SS.hh ou NT)",
-      "order": "10",
+      "text": "Relais mixtes",
+      "order": "11",
       "name": "relaisMixtes",
       "required": "No",
       "inputType": "Text",
       "mrows": "Relais Mixte Obstacle|Relais Mixte Portage|Relais Mixte Medley",
-      "mcolumns": "Open"
+      "mcolumns": "Meilleur temps (M:SS.hh ou NT)|Membre 2 (Prénom Nom)|Membre 3 (Prénom Nom)|Membre 4 (Prénom Nom)"
     },
     "11": {
       "type": "control_matrix",
-      "text": "Corde (duo) — Meilleur temps (M:SS.hh ou NT)",
-      "order": "11",
+      "text": "Corde (duo)",
+      "order": "12",
       "name": "corde",
       "required": "No",
-      "inputType": "Text",
+      "inputType": "Mixed",
       "mrows": "Corde",
-      "mcolumns": "Open M|Open F|MA M|MA F"
-    },
-    "12": {
-      "type": "control_textarea",
-      "text": "Coéquipier(s) + NRAN (un par ligne, pour les relais)",
-      "order": "12",
-      "name": "coequipiers",
-      "required": "No",
-      "hint": "Ex:\nJean Tremblay TRJ4X5\nMarie Lavoie LAM8P2"
-    },
-    "13": {
-      "type": "control_divider",
-      "text": "Autres",
-      "order": "13",
-      "name": "divider3"
-    },
-    "14": {
-      "type": "control_checkbox",
-      "text": "Autres inscriptions",
-      "order": "14",
-      "name": "autres",
-      "required": "No",
-      "options": "Banquet|Coach|Officiel"
+      "mcolumns": "Catégorie|Meilleur temps (M:SS.hh ou NT)|Membre 2 (Prénom Nom)",
+      "columnTypes": "Drop Down|Text|Text",
+      "columnOptions": "Open;MA||"
     },
     "15": {
       "type": "control_button",
       "text": "Soumettre",
-      "order": "15",
+      "order": "16",
       "name": "submit",
       "buttonAlign": "auto"
+    },
+    "16": {
+      "type": "control_dropdown",
+      "text": "Sexe",
+      "order": "7",
+      "name": "sexe",
+      "required": "Yes",
+      "options": "Masculin|Féminin"
     }
   }
 }

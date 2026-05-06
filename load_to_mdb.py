@@ -652,41 +652,31 @@ class IssueCollector:
 
 # --------------------------------------------------------------------------- #
 # JotForm matrix format reader
-# --------------------------------------------------------------------------- #
-# Maps JotForm matrix row labels to TICKET_UID style names
+# Maps JotForm matrix row labels to (style_name, is_relay, is_masters_variant)
 _JOTFORM_STYLE_MAP = {
-    "Obstacle": "Obstacle",
-    "Remorquage": "Remorquage",
-    "Portage (100m)": "Portage",
-    "Portage50 (50m)": "Portage50",
-    "Sauveteur d'acier": "Sauveteur d'acier",
-    "Medley": "Medley",
-    "Corde": "Corde",
-    "Relais Mixte Obstacle": "Obstacle",
-    "Relais Mixte Portage": "Portage",
-    "Relais Mixte Medley": "Medley",
+    "Obstacle":              ("Obstacle", False, False),
+    "Remorquage":            ("Remorquage", False, False),
+    "Portage (100m)":        ("Portage", False, False),
+    "Portage50 (50m)":       ("Portage50", False, False),
+    "Sauveteur d'acier":     ("Sauveteur d'acier", False, False),
+    "Medley":                ("Medley", False, False),
+    "Relais Mixte Obstacle": ("Obstacle", True, False),
+    "Relais Mixte Portage":  ("Portage", True, False),
+    "Relais Mixte Medley":   ("Medley", True, False),
+    "Corde":                 ("Corde", True, False),
 }
 
-# Maps JotForm [Col] labels to (age_code, gender)
-_JOTFORM_CAT_MAP = {
-    "15-18 M": ("1518", GENDER_MALE),
-    "15-18 F": ("1518", GENDER_FEMALE),
-    "Open M": ("OPEN", GENDER_MALE),
-    "Open F": ("OPEN", GENDER_FEMALE),
-    "Open": ("OPEN", GENDER_MIXED),
-    "MA M": ("MASTERS", GENDER_MALE),
-    "MA F": ("MASTERS", GENDER_FEMALE),
+_JOTFORM_CAT_TO_AGE = {
+    "15-18": "1518",
+    "Open":  "OPEN",
+    "MA":    "MASTERS",
 }
-
-# Relay row labels
-_JOTFORM_RELAY_ROWS = {"Relais Mixte Obstacle", "Relais Mixte Portage",
-                       "Relais Mixte Medley", "Corde"}
 
 
 def _read_jotform(wb, ws, header: list[str],
                   issues: IssueCollector | None) -> list[Inscription]:
     """Parse a JotForm matrix-style export into Inscription records."""
-    # Find column indices for standard fields
+
     def _find_col(keywords):
         for i, h in enumerate(header):
             hl = h.lower()
@@ -694,71 +684,34 @@ def _read_jotform(wb, ws, header: list[str],
                 return i
         return None
 
+    i_fullname = _find_col(["nom"]) or _find_col(["athlète"]) or _find_col(["name"])
     i_first = _find_col(["first"])
     i_last = _find_col(["last"])
-    # JotForm may export full name as single column
-    i_fullname = None
-    if i_first is None or i_last is None:
-        i_fullname = _find_col(["nom"]) or _find_col(["name"])
-        if i_fullname is None:
-            i_fullname = _find_col(["athlète"]) or _find_col(["athlete"])
     i_email = _find_col(["courriel"]) or _find_col(["email"])
     i_club = _find_col(["club"])
     i_dob = _find_col(["naissance"]) or _find_col(["birth"])
     i_nran = _find_col(["nran"])
-    i_team = _find_col(["coéquipier"]) or _find_col(["teammate"])
+    i_sexe = _find_col(["sexe"]) or _find_col(["gender"])
 
-    # Parse matrix columns: header contains "[Row][Col]" or ">> Row >> Col"
-    # Build mapping: col_index -> (style_name, age_code, gender, is_relay)
-    matrix_cols: dict[int, tuple] = {}
-    _re_matrix = re.compile(r"\[([^\]]+)\]\[([^\]]+)\]$")
-    _re_matrix_single = re.compile(r"\[([^\]]+)\]$")
-    _re_matrix_gg = re.compile(r">>\s*([^>]+?)\s*>>\s*([^>]+?)\s*$")
+    # Parse matrix columns using ">>" separator
+    # Pattern: "Section >> Row >> ColType"
+    _re_gg = re.compile(r">>\s*([^>]+?)\s*>>\s*([^>]+?)\s*$")
+
+    # For each row_label, collect: {col_type_lower: col_index}
+    row_columns: dict[str, dict[str, int]] = {}
     for i, h in enumerate(header):
-        row_label = col_label = None
-        m = _re_matrix.search(h)
-        if m:
-            row_label, col_label = m.group(1).strip(), m.group(2).strip()
-        else:
-            m = _re_matrix_gg.search(h)
-            if m:
-                row_label, col_label = m.group(1).strip(), m.group(2).strip()
-            else:
-                m2 = _re_matrix_single.search(h)
-                if m2:
-                    row_label = m2.group(1).strip()
-                    col_label = "Open"
-        if row_label is None:
+        m = _re_gg.search(h)
+        if not m:
             continue
-
-        style = _JOTFORM_STYLE_MAP.get(row_label)
-        cat = _JOTFORM_CAT_MAP.get(col_label)
-        if style is None or cat is None:
-            continue
-        age_code, gender = cat
-        is_relay = row_label in _JOTFORM_RELAY_ROWS
-        # For Corde, it's a relay (duo)
-        if row_label == "Corde":
-            is_relay = True
-
-        # Look up the TICKET_UID
-        if is_relay and row_label != "Corde":
-            uid = TICKET_UID.get((style, True, False))
-        elif row_label == "Corde":
-            uid = TICKET_UID.get(("Corde", True, False))
-        elif age_code == "MASTERS" and style == "Obstacle":
-            uid = TICKET_UID.get(("Obstacle", False, True))
-        else:
-            uid = TICKET_UID.get((style, False, False))
-
-        if uid is None:
-            continue
-        matrix_cols[i] = (style, age_code, gender, is_relay, uid)
+        row_label = m.group(1).strip()
+        col_label = m.group(2).strip().lower()
+        row_columns.setdefault(row_label, {})[col_label] = i
 
     out: list[Inscription] = []
     for row_idx, r in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         if not r:
             continue
+
         # Parse name
         if i_fullname is not None:
             fullname = str(r[i_fullname] or "").strip() if i_fullname < len(r) else ""
@@ -767,11 +720,14 @@ def _read_jotform(wb, ws, header: list[str],
             parts = fullname.rsplit(" ", 1)
             first = parts[0] if len(parts) > 1 else fullname
             last = parts[1] if len(parts) > 1 else ""
+        elif i_first is not None and i_last is not None:
+            first = str(r[i_first] or "").strip()
+            last = str(r[i_last] or "").strip()
         else:
-            first = str(r[i_first] or "").strip() if i_first is not None and i_first < len(r) else ""
-            last = str(r[i_last] or "").strip() if i_last is not None and i_last < len(r) else ""
+            continue
         if not first and not last:
             continue
+
         email = str(r[i_email]).strip() if i_email is not None and r[i_email] else None
         club = str(r[i_club]).strip() if i_club is not None and r[i_club] else "Unattached"
         raw_dob = r[i_dob] if i_dob is not None else None
@@ -781,21 +737,87 @@ def _read_jotform(wb, ws, header: list[str],
                         f"{first} {last}: can't parse DOB {raw_dob!r}",
                         row=row_idx)
         license_val = str(r[i_nran]).strip() if i_nran is not None and r[i_nran] else None
-        teammates = str(r[i_team]).strip() if i_team is not None and r[i_team] else None
 
-        # Expand matrix cells into individual Inscription records
-        for col_i, (style, age_code, gender, is_relay, uid) in matrix_cols.items():
-            cell = r[col_i] if col_i < len(r) else None
-            if cell is None or str(cell).strip() == "":
+        # Gender from Sexe field
+        sexe_raw = str(r[i_sexe] or "").strip().lower() if i_sexe is not None else ""
+        if sexe_raw.startswith("m"):
+            athlete_gender = GENDER_MALE
+        elif sexe_raw.startswith("f"):
+            athlete_gender = GENDER_FEMALE
+        else:
+            athlete_gender = 0
+
+        # Process each matrix row
+        for row_label, cols in row_columns.items():
+            style_info = _JOTFORM_STYLE_MAP.get(row_label)
+            if style_info is None:
                 continue
-            raw_time = str(cell).strip()
+            style_name, is_relay, _ = style_info
+
+            # Get time column
+            time_col = None
+            for k, idx in cols.items():
+                if "temps" in k or "time" in k:
+                    time_col = idx
+                    break
+            if time_col is None:
+                continue
+
+            raw_time = str(r[time_col] or "").strip() if time_col < len(r) and r[time_col] else ""
+            if not raw_time:
+                continue  # Not entered for this event
+
             best_ms = parse_best_time(raw_time)
             if raw_time.lower() not in ("nt", "n/a", "na", "-") and best_ms is None:
                 if issues:
                     issues.warn("bad_time",
-                                f"{first} {last} {style}/{age_code}: "
+                                f"{first} {last} {row_label}: "
                                 f"can't parse time {raw_time!r}",
                                 row=row_idx)
+
+            # Determine age code from category column
+            cat_col = None
+            for k, idx in cols.items():
+                if "cat" in k:
+                    cat_col = idx
+                    break
+            if cat_col is not None and cat_col < len(r) and r[cat_col]:
+                cat_raw = str(r[cat_col]).strip()
+                age_code = _JOTFORM_CAT_TO_AGE.get(cat_raw, "OPEN")
+            else:
+                age_code = "OPEN"
+
+            # Determine gender for event
+            if is_relay and row_label != "Corde":
+                gender = GENDER_MIXED
+            elif row_label == "Corde":
+                gender = athlete_gender or GENDER_MIXED
+            else:
+                gender = athlete_gender or GENDER_MALE
+
+            # Look up UID
+            if is_relay and row_label != "Corde":
+                uid = TICKET_UID.get((style_name, True, False))
+            elif row_label == "Corde":
+                uid = TICKET_UID.get(("Corde", True, False))
+            elif age_code == "MASTERS" and style_name == "Obstacle":
+                uid = TICKET_UID.get(("Obstacle", False, True))
+            else:
+                uid = TICKET_UID.get((style_name, False, False))
+            if uid is None:
+                continue
+
+            # Build teammates string for relays
+            teammates = None
+            if is_relay:
+                members = []
+                for k, idx in sorted(cols.items()):
+                    if "membre" in k or "member" in k:
+                        val = str(r[idx] or "").strip() if idx < len(r) and r[idx] else ""
+                        if val:
+                            members.append(val)
+                if members:
+                    teammates = "\n".join(members)
 
             ev = EventKey(age_code=age_code, gender=gender,
                           uniqueid=uid, is_relay=is_relay)
@@ -803,7 +825,7 @@ def _read_jotform(wb, ws, header: list[str],
                 first=first, last=last, email=email, club=club,
                 birthdate=bd, license=license_val,
                 best_time_ms=best_ms, event=ev,
-                teammates=teammates if is_relay else None,
+                teammates=teammates,
             ))
 
     return out
