@@ -626,7 +626,8 @@ class IssueCollector:
         lines: list[str] = []
         lines.append("")
         lines.append("=" * 60)
-        lines.append(f"  {title}")
+        from datetime import datetime
+        lines.append(f"  {title}  ({datetime.now():%Y-%m-%d %H:%M})")
         lines.append("=" * 60)
         for (sev, cat), items in ordered:
             lines.append(f"  [{sev}] {cat}: {len(items)}")
