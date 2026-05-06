@@ -1348,6 +1348,18 @@ def main():
         len(v) for v in template.events_by_uid_gender.values())
     print(f"  template: {len(template.styles_by_uid)} SWIMSTYLE rows, "
           f"{n_events_in_template} SWIMEVENTs")
+
+    # Sanity check: all TICKET_UID values must exist in the template
+    missing_uids = [uid for uid in set(TICKET_UID.values())
+                    if uid not in template.styles_by_uid]
+    if missing_uids:
+        print(f"\n  FATAL: TICKET_UID references UIDs not in template "
+              f"SWIMSTYLE: {sorted(missing_uids)}")
+        print(f"  The template.mdb may have been modified or is incompatible.")
+        sys.exit(2)
+    if AGE_DATE is None:
+        print(f"\n  FATAL: could not read AGEDATE from BSGLOBAL.MEETVALUES")
+        sys.exit(2)
     if template.is_first_run:
         print(f"  no inscriptions in template — FIRST RUN")
     else:
