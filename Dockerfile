@@ -53,7 +53,8 @@ COPY load_to_mdb.py load_to_lenex.py copy_prelim_to_masters_final.py template.md
 COPY webapp ./webapp
 
 ARG BUILD_TIMESTAMP=""
-RUN echo "${BUILD_TIMESTAMP}" > /app/BUILD_TIMESTAMP
+RUN if [ -n "${BUILD_TIMESTAMP}" ]; then echo "${BUILD_TIMESTAMP}" > /app/BUILD_TIMESTAMP; \
+    else date '+%Y-%m-%d %H:%M' > /app/BUILD_TIMESTAMP; fi
 
 # Point the loader at the bundled UCanAccess jars
 ENV UCANACCESS_DIR=/opt/ucanaccess
