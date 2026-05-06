@@ -52,6 +52,9 @@ WORKDIR /app
 COPY load_to_mdb.py load_to_lenex.py copy_prelim_to_masters_final.py template.mdb ./
 COPY webapp ./webapp
 
+ARG BUILD_TIMESTAMP=""
+RUN echo "${BUILD_TIMESTAMP}" > /app/BUILD_TIMESTAMP
+
 # Point the loader at the bundled UCanAccess jars
 ENV UCANACCESS_DIR=/opt/ucanaccess
 # Shared staging dir for per-request temp files

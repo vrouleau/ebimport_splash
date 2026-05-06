@@ -38,6 +38,8 @@ LNX_LOADER  = REPO_ROOT / "load_to_lenex.py"
 COPY_SCRIPT = REPO_ROOT / "copy_prelim_to_masters_final.py"
 DEFAULT_MDB = REPO_ROOT / "template.mdb"
 
+BUILD_TIMESTAMP = (REPO_ROOT / "BUILD_TIMESTAMP").read_text().strip() or "dev"
+
 STAGING_DIR = Path(os.environ.get("STAGING_DIR", "/tmp/ebimport_staging"))
 STAGING_DIR.mkdir(parents=True, exist_ok=True)
 STAGING_TTL_SECS = 10 * 60                # 10 minutes
@@ -311,7 +313,7 @@ def _download_name(mode: str, xlsx_name: str) -> str:
 @app.route("/")
 def index():
     _gc_stagings()
-    return render_template("index.html")
+    return render_template("index.html", build_timestamp=BUILD_TIMESTAMP)
 
 
 @app.route("/api/run", methods=["POST"])

@@ -5,6 +5,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BUILD_TIMESTAMP: "${BUILD_TIMESTAMP:-}"
     restart: unless-stopped
     ports:
       - "5000:5000"
