@@ -143,6 +143,24 @@
       </section>
     </section>
 
+    <!-- PDF Audit -->
+    <section class="card">
+      <h2>4. Audit PDF vs xlsx</h2>
+      <p>Comparer un heat-sheet PDF (généré par SPLASH) avec le xlsx source.</p>
+      <form id="audit-form">
+        <fieldset>
+          <legend>Fichiers</legend>
+          <label>PDF (heat sheet) : <input type="file" name="pdf" accept=".pdf" required></label>
+          <label>xlsx (source) : <input type="file" name="xlsx" accept=".xlsx" required></label>
+        </fieldset>
+        <button type="submit">Auditer</button>
+        <span id="audit-status" class="status"></span>
+      </form>
+      <section id="audit-results" hidden>
+        <pre id="audit-output"></pre>
+      </section>
+    </section>
+
     <footer>
       <small>
         Source : <a href="https://github.com/vrouleau/ebimport_splash"

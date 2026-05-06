@@ -12,6 +12,7 @@ download is streamed or after `STAGING_TTL_SECS` of inactivity.
 from __future__ import annotations
 
 import os
+import json
 import re
 import shutil
 import subprocess
@@ -36,6 +37,7 @@ REPO_ROOT   = APP_DIR.parent
 MDB_LOADER  = REPO_ROOT / "load_to_mdb.py"
 LNX_LOADER  = REPO_ROOT / "load_to_lenex.py"
 COPY_SCRIPT = REPO_ROOT / "copy_prelim_to_masters_final.py"
+AUDIT_SCRIPT = REPO_ROOT / "audit_pdf.py"
 DEFAULT_MDB = REPO_ROOT / "template.mdb"
 
 BUILD_TIMESTAMP = (REPO_ROOT / "BUILD_TIMESTAMP").read_text().strip() or "dev"
@@ -427,6 +429,47 @@ def api_copy_masters():
     except Exception as e:
         _drop_staging(staging.id)
         app.logger.exception("copy-masters failure")
+        return jsonify({"error": f"Erreur interne: {e}"}), 500
+
+
+@app.route("/api/audit", methods=["POST"])
+def api_audit():
+    """Run PDF audit: compare SPLASH heat-sheet PDF against xlsx."""
+    _gc_stagings()
+    pdf = request.files.get("pdf")
+    xlsx = request.files.get("xlsx")
+    if not pdf or not pdf.filename:
+        return jsonify({"error": "Un fichier PDF est requis."}), 400
+    if not xlsx or not xlsx.filename:
+        return jsonify({"error": "Un fichier xlsx est requis."}), 400
+
+    staging = _new_staging()
+    try:
+        pdf_path = staging.dir / "heats.pdf"
+        xlsx_path = staging.dir / "input.xlsx"
+        pdf.save(pdf_path)
+        xlsx.save(xlsx_path)
+
+        completed = subprocess.run(
+            [sys.executable, str(AUDIT_SCRIPT),
+             "--pdf", str(pdf_path), "--xlsx", str(xlsx_path), "--json"],
+            capture_output=True, text=True, timeout=120)
+
+        # Clean up immediately
+        pdf_path.unlink(missing_ok=True)
+        xlsx_path.unlink(missing_ok=True)
+        _drop_staging(staging.id)
+
+        if completed.returncode != 0:
+            return jsonify({"error": completed.stderr or "Audit failed"}), 500
+
+        return jsonify(json.loads(completed.stdout))
+    except subprocess.TimeoutExpired:
+        _drop_staging(staging.id)
+        return jsonify({"error": "Dépassement du délai."}), 504
+    except Exception as e:
+        _drop_staging(staging.id)
+        app.logger.exception("audit failure")
         return jsonify({"error": f"Erreur interne: {e}"}), 500
 
 

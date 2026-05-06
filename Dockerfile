@@ -26,7 +26,8 @@ RUN pip install --no-cache-dir \
         gunicorn==23.0.0 \
         openpyxl==3.1.5 \
         jaydebeapi==1.2.3 \
-        JPype1==1.5.2
+        JPype1==1.5.2 \
+        PyMuPDF==1.25.3
 
 # UCanAccess jars (5 of them, flattened into /opt/ucanaccess/)
 ARG UCANACCESS_VER=5.0.1
@@ -49,7 +50,7 @@ RUN mkdir -p /opt/ucanaccess \
 
 # App code (loaders + webapp)
 WORKDIR /app
-COPY load_to_mdb.py load_to_lenex.py copy_prelim_to_masters_final.py template.mdb ./
+COPY load_to_mdb.py load_to_lenex.py copy_prelim_to_masters_final.py audit_pdf.py template.mdb ./
 COPY webapp ./webapp
 
 ARG BUILD_TIMESTAMP=""

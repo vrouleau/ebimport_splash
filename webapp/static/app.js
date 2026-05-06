@@ -178,3 +178,45 @@
     }
   });
 })();
+
+// --- PDF Audit ---
+(() => {
+  const auditForm = document.getElementById("audit-form");
+  const auditStatus = document.getElementById("audit-status");
+  const auditResults = document.getElementById("audit-results");
+  const auditOutput = document.getElementById("audit-output");
+
+  auditForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    auditStatus.textContent = "Analyse en cours…";
+    auditResults.hidden = true;
+    const fd = new FormData(auditForm);
+    try {
+      const resp = await fetch("/api/audit", { method: "POST", body: fd });
+      const data = await resp.json();
+      if (data.error) {
+        auditStatus.textContent = "Erreur: " + data.error;
+        return;
+      }
+      auditStatus.textContent = "";
+      let out = `PDF: ${data.pdf_entries} entrées, ${data.pdf_athletes} athlètes\n`;
+      out += `Épreuves: ${data.pdf_events.join(", ")}\n\n`;
+      for (const [name, check] of Object.entries(data.checks)) {
+        const icon = check.ok ? "✓" : "✗";
+        out += `${icon} ${name}`;
+        if (!check.ok && check.details && check.details.length) {
+          out += `\n`;
+          check.details.slice(0, 15).forEach(d => { out += `    ${d}\n`; });
+          if (check.details.length > 15) out += `    … et ${check.details.length - 15} de plus\n`;
+        } else {
+          out += "\n";
+        }
+      }
+      out += `\n${data.all_critical_ok ? "✓ Tous les contrôles critiques passent." : "✗ PROBLÈMES CRITIQUES DÉTECTÉS"}`;
+      auditOutput.textContent = out;
+      auditResults.hidden = false;
+    } catch (err) {
+      auditStatus.textContent = "Erreur réseau: " + err.message;
+    }
+  });
+})();
