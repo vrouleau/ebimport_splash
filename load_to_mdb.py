@@ -1781,6 +1781,7 @@ def main():
     db.insert_many("SWIMRESULT", sr_batch)
 
     # ----- RELAY + RELAYPOSITION -----
+    _relay_squad_counter: dict[tuple, int] = {}  # (club_id, event_id) -> next idx
     for (cnorm, ekey), squads in relay_squads.items():
         ev = events_in_xlsx[ekey]
         tevent = template.find_event(
@@ -1788,11 +1789,29 @@ def main():
         style = template.styles_by_uid[ev.uniqueid]
         relay_size = style.relay_count or 4
         club_id = club_ids[cnorm]
+        if tevent is None:
+            issues.warn("relay_skipped",
+                f"{clubs[cnorm]} relay UID {ev.uniqueid} gender={ev.gender} "
+                f"({ev.age_code}) — no matching event in template")
+            continue
         event_id = tevent.swim_event_id
 
         for club_squad_idx, squad in enumerate(squads, start=1):
             # Skip incomplete squads
             if len(squad) < relay_size:
+                continue
+
+            # Skip if any member lacks an athlete_id (e.g. not inserted)
+            missing = [akey for akey, _ in squad[:relay_size]
+                       if akey not in athlete_ids]
+            if missing:
+                relay_name = "/".join(athletes[k].last
+                                      for k, _ in squad[:relay_size])
+                names = ", ".join(f"{athletes[k].first} {athletes[k].last}"
+                                  for k in missing)
+                issues.warn("relay_skipped",
+                    f"relay '{relay_name}' ({clubs[cnorm]}, UID {ev.uniqueid} "
+                    f"{ev.age_code}) skipped — member not inserted: {names}")
                 continue
 
             # Route by age-sum for Masters, by bracket label otherwise
@@ -1802,11 +1821,15 @@ def main():
                 ages = [age_at(athletes[akey].birthdate)
                          for akey, _ in squad[:relay_size]]
                 if any(a is None for a in ages):
-                    ins0 = athletes[squad[0][0]]
-                    issues.warn("masters_relay_no_dob",
-                        f"{clubs[cnorm]} Masters relay squad skipped — "
-                        f"at least one athlete has no birthdate "
-                        f"(first: {ins0.first} {ins0.last})")
+                    relay_name = "/".join(athletes[akey].last
+                                          for akey, _ in squad[:relay_size])
+                    no_dob_names = [f"{athletes[akey].first} {athletes[akey].last}"
+                                    for akey, _ in squad[:relay_size]
+                                    if athletes[akey].birthdate is None]
+                    issues.warn("relay_skipped",
+                        f"relay '{relay_name}' ({clubs[cnorm]}, UID {ev.uniqueid} "
+                        f"MASTERS) skipped — missing DOB: "
+                        f"{', '.join(no_dob_names)}")
                     stats["masters_skipped_no_dob"] += 1
                     continue
                 age_sum = sum(ages)
@@ -1814,13 +1837,16 @@ def main():
             ag = pick_agegroup_for_relay(tevent, ev.age_code, age_sum,
                                          oldest_age=oldest_age)
             if ag is None:
-                issues.warn("relay_unroutable",
+                issues.warn("relay_skipped",
                     f"{clubs[cnorm]} relay UID {ev.uniqueid} "
                     f"({ev.age_code}) couldn't find an AGEGROUP "
                     f"(age_sum={age_sum})")
                 continue
 
-            stable_key = (club_id, event_id, club_squad_idx)
+            _ce_key = (club_id, event_id)
+            _relay_squad_counter.setdefault(_ce_key, 0)
+            _relay_squad_counter[_ce_key] += 1
+            stable_key = (club_id, event_id, _relay_squad_counter[_ce_key])
             if stable_key in existing_relays_stable:
                 rid = existing_relays_stable[stable_key]
                 for leg_no, (akey, _bt) in enumerate(squad[:relay_size],
