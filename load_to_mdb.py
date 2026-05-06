@@ -58,9 +58,9 @@ UCANACCESS_DIR = os.environ.get(
 MEET_NATION = "CAN"
 # Age reference date used when routing Masters entries to 5-year brackets
 # and when computing the sum-of-ages for Masters relays.  The
-# Championnats canadiens de sauvetage 2026 takes place 29-31 May 2026 —
-# athletes' ages are computed at AGE_DATE.
-AGE_DATE = dt.date(2026, 5, 31)
+# Default age date — overridden at runtime from BSGLOBAL.MEETVALUES.AGEDATE
+# if available in the template MDB.
+AGE_DATE = dt.date(2026, 12, 31)
 
 # SPLASH/Lenex gender encoding in SMALLINT columns.
 GENDER_MALE   = 1
@@ -1019,6 +1019,17 @@ class TemplateIndex:
             self._has_results = any(True for _ in db.query(
                 "SELECT TOP 1 RELAYID FROM RELAY"))
 
+        # Read AGEDATE from MEETVALUES in BSGLOBAL
+        global AGE_DATE
+        for (data,) in db.query(
+                "SELECT DATA FROM BSGLOBAL WHERE NAME='MEETVALUES'"):
+            m = re.search(r"AGEDATE=D;(\d{8})", data or "")
+            if m:
+                AGE_DATE = dt.date(int(m.group(1)[:4]),
+                                   int(m.group(1)[4:6]),
+                                   int(m.group(1)[6:8]))
+                break
+
     @property
     def is_first_run(self) -> bool:
         return not self._has_results
@@ -1328,6 +1339,7 @@ def main():
     print(f"  starting BS_GLOBAL_UID = {db._uid}")
 
     template = TemplateIndex(db)
+    print(f"  age date: {AGE_DATE}")
     n_events_in_template = sum(
         len(v) for v in template.events_by_uid_gender.values())
     print(f"  template: {len(template.styles_by_uid)} SWIMSTYLE rows, "
