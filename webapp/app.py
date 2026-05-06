@@ -40,7 +40,7 @@ DEFAULT_MDB = REPO_ROOT / "template.mdb"
 
 STAGING_DIR = Path(os.environ.get("STAGING_DIR", "/tmp/ebimport_staging"))
 STAGING_DIR.mkdir(parents=True, exist_ok=True)
-STAGING_TTL_SECS = 30 * 60                # 30 minutes
+STAGING_TTL_SECS = 10 * 60                # 10 minutes
 
 # Upload size limits (bytes)
 MAX_XLSX_BYTES = 50 * 1024 * 1024
@@ -49,6 +49,15 @@ MAX_MDB_BYTES  = 200 * 1024 * 1024
 # --------------------------------------------------------------------------- #
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_XLSX_BYTES + MAX_MDB_BYTES + 1 * 1024 * 1024
+
+
+@app.after_request
+def _security_headers(resp):
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+    return resp
 
 
 # --------------------------------------------------------------------------- #
@@ -237,6 +246,12 @@ def run_loader(mode: str,
 
     parsed["download_name"] = _download_name(mode, xlsx_path.name)
     parsed["download_id"]   = staging.id
+
+    # Remove intermediate files — only keep the result zip
+    for f in staging.dir.iterdir():
+        if f != staging.result_zip:
+            f.unlink(missing_ok=True)
+
     return parsed
 
 
@@ -331,6 +346,10 @@ def api_run():
             user_mdb_path = DEFAULT_MDB
 
         parsed = run_loader(mode, xlsx_path, staging, user_mdb=user_mdb_path)
+        # Remove uploaded files immediately — only keep the result zip
+        xlsx_path.unlink(missing_ok=True)
+        if user_mdb_path and user_mdb_path != DEFAULT_MDB:
+            user_mdb_path.unlink(missing_ok=True)
         return jsonify(parsed)
     except subprocess.TimeoutExpired:
         _drop_staging(staging.id)
