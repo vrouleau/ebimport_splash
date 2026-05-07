@@ -241,11 +241,19 @@ def run_loader(mode: str,
                          compression=zipfile.ZIP_DEFLATED) as z:
         if result_file is not None and result_file.exists():
             z.write(result_file, arcname=result_file.name)
-        # Include the template mdb in lenex mode
+        # Include the template mdb in lenex mode (as meet.mdb for consistency)
         if mode == "lenex":
             mdb_in_staging = staging.dir / "template.mdb"
             if mdb_in_staging.exists():
-                z.write(mdb_in_staging, arcname="template.mdb")
+                z.write(mdb_in_staging, arcname="meet.mdb")
+        # Include masters_transfer.vbs + .bat for MDB and Lenex modes
+        if mode in ("mdb", "lenex"):
+            vbs_path = REPO_ROOT / "masters_transfer.vbs"
+            bat_path = REPO_ROOT / "masters_transfer.bat"
+            if vbs_path.exists():
+                z.write(vbs_path, arcname="masters_transfer.vbs")
+            if bat_path.exists():
+                z.write(bat_path, arcname="masters_transfer.bat")
         z.writestr("issues.txt", issues_txt)
 
     parsed["download_name"] = _download_name(mode, xlsx_path.name)
