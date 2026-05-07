@@ -246,14 +246,13 @@ def run_loader(mode: str,
             mdb_in_staging = staging.dir / "template.mdb"
             if mdb_in_staging.exists():
                 z.write(mdb_in_staging, arcname="meet.mdb")
-        # Include masters_transfer.vbs + .bat for MDB and Lenex modes
+        # Include masters_transfer.vbs + .bat and simulate_results for MDB and Lenex modes
         if mode in ("mdb", "lenex"):
-            vbs_path = REPO_ROOT / "masters_transfer.vbs"
-            bat_path = REPO_ROOT / "masters_transfer.bat"
-            if vbs_path.exists():
-                z.write(vbs_path, arcname="masters_transfer.vbs")
-            if bat_path.exists():
-                z.write(bat_path, arcname="masters_transfer.bat")
+            for fname in ("masters_transfer.vbs", "masters_transfer.bat",
+                          "simulate_results.vbs", "simulate_results.bat"):
+                fpath = REPO_ROOT / fname
+                if fpath.exists():
+                    z.write(fpath, arcname=fname)
         z.writestr("issues.txt", issues_txt)
 
     parsed["download_name"] = _download_name(mode, xlsx_path.name)
