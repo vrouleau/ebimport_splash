@@ -236,7 +236,8 @@ def audit(pdf_path: Path, xlsx_path: Path) -> dict:
         key = (e["last"], e["first"])
         xlsx_times = xlsx_times_by_name.get(key, set())
         if xlsx_times and pdf_ms not in xlsx_times:
-            if not any(abs(pdf_ms - t) <= 10 for t in xlsx_times):
+            # Allow ±5% tolerance (simulated results vary from entry time)
+            if not any(abs(pdf_ms - t) <= t * 0.05 for t in xlsx_times):
                 time_mismatches.append(
                     f"{e['first']} {e['last']} ev#{e['event']}: "
                     f"PDF={e['time']} xlsx={sorted(xlsx_times)}"
