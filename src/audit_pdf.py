@@ -32,23 +32,33 @@ from load_to_mdb import read_attendees, IssueCollector
 # --------------------------------------------------------------------------- #
 _RE_EVENT = re.compile(r"Epreuve\s+(\d+)")
 _RE_HEAT = re.compile(r"Série\s+(\d+)\s+de\s+(\d+)")
-_RE_ATHLETE = re.compile(
+_RE_ATHLETE_HEAT = re.compile(
     r"^(\d+)\s+([A-ZÀÂÄÉÈÊËÏÎÔÙÛÜŸÇÆŒ'' -]+),\s+(.+)$"
+)
+_RE_RANK = re.compile(r"^(\d+)\.$|^disq\.$|^dns$|^dnf$")
+_RE_NAME = re.compile(
+    r"^([A-ZÀÂÄÉÈÊËÏÎÔÙÛÜŸÇÆŒ'' -]+),\s+(.+)$"
 )
 _RE_TIME = re.compile(r"^(\d+:)*\d+[.:]\d+$")
 
 
 def parse_pdf(pdf_path: Path) -> list[dict]:
-    """Extract athlete entries from a SPLASH heat-sheet PDF."""
+    """Extract athlete entries from a SPLASH heat-sheet or results PDF."""
     doc = fitz.open(str(pdf_path))
     entries = []
     event_num = None
     heat_num = None
     total_heats = None
+    is_results = False
 
     for page in doc:
         lines = page.get_text().splitlines()
         i = 0
+
+        # Detect results format
+        if any("Liste résultats" in l for l in lines):
+            is_results = True
+
         while i < len(lines):
             line = lines[i].strip()
 
@@ -65,8 +75,9 @@ def parse_pdf(pdf_path: Path) -> list[dict]:
                 i += 1
                 continue
 
-            m = _RE_ATHLETE.match(line)
-            if m and event_num:
+            # Heat-sheet format: "lane  LASTNAME, First"
+            m = _RE_ATHLETE_HEAT.match(line)
+            if m and event_num and not is_results:
                 lane = int(m.group(1))
                 last = m.group(2).strip()
                 first = m.group(3).strip()
@@ -83,6 +94,46 @@ def parse_pdf(pdf_path: Path) -> list[dict]:
                 })
                 i += 4
                 continue
+
+            # Results format: "rank." then "LASTNAME, First" on next line
+            m = _RE_RANK.match(line)
+            if m and event_num:
+                # Peek at next line for name
+                if i + 1 < len(lines):
+                    nm = _RE_NAME.match(lines[i + 1].strip())
+                    if nm:
+                        last = nm.group(1).strip()
+                        first = nm.group(2).strip()
+                        # birth_year (may be missing, e.g. "NODOB, Nora" has no year)
+                        j = i + 2
+                        birth_year = ""
+                        club = ""
+                        time_str = None
+                        if j < len(lines):
+                            val = lines[j].strip()
+                            if re.match(r"^\d{2,4}$", val):
+                                birth_year = val
+                                j += 1
+                            # club
+                            if j < len(lines):
+                                val = lines[j].strip()
+                                if val and not _RE_TIME.match(val) and val not in ("A", "B", "R", "disq."):
+                                    club = val
+                                    j += 1
+                            # time
+                            if j < len(lines):
+                                val = lines[j].strip()
+                                if _RE_TIME.match(val):
+                                    time_str = val
+                                    j += 1
+                        entries.append({
+                            "last": last, "first": first, "lane": None,
+                            "event": event_num, "time": time_str,
+                            "club": club, "birth_year": birth_year,
+                            "heat": None, "total_heats": None,
+                        })
+                        i = j
+                        continue
             i += 1
     doc.close()
     return entries
@@ -204,7 +255,7 @@ def audit(pdf_path: Path, xlsx_path: Path) -> dict:
     seeding_violations = []
     for ev_num in sorted(by_event_heat):
         heats = by_event_heat[ev_num]
-        for h in sorted(heats):
+        for h in sorted(h for h in heats if h is not None):
             if h + 1 not in heats:
                 continue
             t_h = [parse_time_ms(e["time"]) for e in heats[h]]
