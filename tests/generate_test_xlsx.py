@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import random
+from collections import defaultdict
 from pathlib import Path
 
 import openpyxl
@@ -249,13 +250,28 @@ def build_rows(athletes, rng):
     rows = []
 
     # 1) Normal individual tickets
+    # Track Corde entries per club to pair them up later
+    corde_by_club: dict[str, list[dict]] = defaultdict(list)
     for ath in athletes:
         for ticket in pick_individual_tickets(ath, rng):
             rows.append([
                 ath["first"], ath["last"], ath["email"], ticket,
                 random_time(rng, rough_seconds_for_ticket(ticket)),
-                ath["club"], ath["dob"], ath["nran"],
+                ath["club"], ath["dob"], ath["nran"], None,
             ])
+            if "Corde" in ticket:
+                corde_by_club[ath["club"]].append(ath)
+
+    # Pair up Corde athletes (duo relay) — add teammate field
+    for club, corde_athletes in corde_by_club.items():
+        pairs = list(zip(corde_athletes[::2], corde_athletes[1::2]))
+        for a, b in pairs:
+            # Find their Corde rows and add teammate
+            for row in rows:
+                if row[0] == a["first"] and row[1] == a["last"] and "Corde" in (row[3] or ""):
+                    row[8] = f"{b['first']} {b['last']} {b['nran']}"
+                elif row[0] == b["first"] and row[1] == b["last"] and "Corde" in (row[3] or ""):
+                    row[8] = f"{a['first']} {a['last']} {a['nran']}"
 
     # 2) Relay tickets — sprinkle mixed relays per club per age bracket.
     # Aim for most to have >=4 people (full squads); also build one
@@ -267,11 +283,16 @@ def build_rows(athletes, rng):
                 if a["club"] == club and a["age_code"] == age_code]
         chosen = rng.sample(pool, min(size, len(pool)))
         for ath in chosen:
+            # List teammates (all other chosen members), newline-separated
+            teammates = "\n".join(
+                f"{t['first']} {t['last']} {t['nran']}"
+                for t in chosen if t is not ath
+            )
             for rt in RELAY_TICKETS[age_code]:
                 rows.append([
                     ath["first"], ath["last"], ath["email"], rt,
                     random_time(rng, rough_seconds_for_ticket(rt)),
-                    ath["club"], ath["dob"], ath["nran"],
+                    ath["club"], ath["dob"], ath["nran"], teammates,
                 ])
 
     # Club 1: 4 athletes for 15-18 relay (complete squad)
