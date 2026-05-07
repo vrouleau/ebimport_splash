@@ -196,6 +196,20 @@ xlsx row number.
 
 ---
 
+---
+
+## Masters Transfer (Phase 2)
+
+After prelim heats are run, Masters athletes are moved from the prelim
+to their dedicated Masters final events using a VBS script that runs
+on Windows.
+
+See **[docs/MASTERS_TRANSFER.md](docs/MASTERS_TRANSFER.md)** for the
+full process flow, the `_MA`/`BONUSENTRY` marking system, and the
+UCanAccess limitation that requires the VBS approach.
+
+---
+
 ## Caveats & known limitations
 
 - The MDB writer is tested on UCanAccess **5.0.1** / Jackcess 3.0.1
