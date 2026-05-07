@@ -2,8 +2,10 @@
 ' Copies Masters athletes from prelim events to Masters finals,
 ' creates heats, and deletes the prelim rows.
 '
-' Usage: cscript masters_transfer.vbs "C:\path\to\meet.mdb"
+' Identifies Masters by BONUSENTRY='T' (MDB loader path).
+' If none found, falls back to age >= 25 (Lenex import path).
 '
+' Usage: cscript masters_transfer.vbs "C:\path\to\meet.mdb"
 ' Run AFTER prelim heats have been swum (SWIMTIME populated).
 
 If WScript.Arguments.Count < 1 Then
@@ -11,19 +13,21 @@ If WScript.Arguments.Count < 1 Then
     WScript.Quit 1
 End If
 
-Dim mdbPath, conn, rs, sql
+Dim mdbPath, conn, rs, rs2, sql
 Dim nextUID, laneMin, laneMax, lanesPerHeat, ageDate
 Dim totalTransferred, totalHeats, totalDeleted
 Dim mvData, adPos, adStr
 Dim dictFinals, fk
 Dim pEids(100), pStyles(100), pGenders(100), pEnums(100), pCount, pi
-Dim lk, fi, finalEid, finalEnum, agList
+Dim lk, fi, finalEid, finalEnum
 Dim fagIds(50), fagMins(50), fagMaxs(50), fagCount
 Dim maxHeat
 Dim srIds(500), athIds(500), swimtimes(500), entrytimes(500)
 Dim reactions(500), statuses(500), birthdates(500), srCount
 Dim heatNum, laneNum, currentHeatId, eventCount, si
 Dim athleteAge, bdVal, targetAGID, ki, stVal
+Dim useBonus, rsMA, maCount, maAid, maLic, maClean
+Dim shouldInclude, tmpAge
 
 mdbPath = WScript.Arguments(0)
 Set conn = CreateObject("ADODB.Connection")
@@ -41,7 +45,7 @@ laneMax = CInt(rs("LANEMAX"))
 rs.Close
 lanesPerHeat = laneMax - laneMin + 1
 
-' Get AGEDATE from MEETVALUES
+' Get AGEDATE
 Set rs = conn.Execute("SELECT DATA FROM BSGLOBAL WHERE NAME='MEETVALUES'")
 mvData = rs("DATA")
 rs.Close
@@ -54,7 +58,36 @@ Else
 End If
 WScript.Echo "Age date: " & ageDate
 
-' Build finals lookup: styleid_gender -> (eventid, eventnumber)
+' Detect mode and mark Masters
+' First: check for _MA suffix in LICENSE (Lenex path)
+maCount = 0
+Set rsMA = conn.Execute("SELECT ATHLETEID, LICENSE FROM ATHLETE WHERE LICENSE LIKE '%[_]MA'")
+Do While Not rsMA.EOF
+    maAid = CLng(rsMA("ATHLETEID"))
+    maLic = rsMA("LICENSE") & ""
+    maClean = Left(maLic, Len(maLic) - 3)
+    conn.Execute "UPDATE SWIMRESULT SET BONUSENTRY='T' WHERE ATHLETEID=" & maAid
+    conn.Execute "UPDATE ATHLETE SET LICENSE='" & maClean & "' WHERE ATHLETEID=" & maAid
+    maCount = maCount + 1
+    rsMA.MoveNext
+Loop
+rsMA.Close
+If maCount > 0 Then
+    WScript.Echo "Marked " & maCount & " athletes from _MA suffix"
+End If
+
+' Now check if we have BONUSENTRY='T' (either from MDB loader or just marked above)
+Set rs = conn.Execute("SELECT COUNT(*) AS C FROM SWIMRESULT WHERE BONUSENTRY='T'")
+If CInt(rs("C")) > 0 Then
+    useBonus = True
+    WScript.Echo "Mode: BONUSENTRY (" & CInt(rs("C")) & " entries)"
+Else
+    useBonus = False
+    WScript.Echo "Mode: age-based fallback (no Masters markers found)"
+End If
+rs.Close
+
+' Build finals lookup
 Set dictFinals = CreateObject("Scripting.Dictionary")
 Set rs = conn.Execute("SELECT SWIMEVENTID, SWIMSTYLEID, GENDER, EVENTNUMBER FROM SWIMEVENT WHERE ROUND = 1 AND MASTERS = 'T'")
 Do While Not rs.EOF
@@ -66,9 +99,9 @@ Do While Not rs.EOF
 Loop
 rs.Close
 
-' Collect prelim events with Masters brackets
+' Collect prelim events
 pCount = 0
-Set rs = conn.Execute("SELECT DISTINCT e.SWIMEVENTID, e.SWIMSTYLEID, e.GENDER, e.EVENTNUMBER FROM SWIMEVENT e INNER JOIN AGEGROUP a ON a.SWIMEVENTID = e.SWIMEVENTID WHERE e.ROUND = 2 AND e.MASTERS = 'F' AND a.AGEMIN >= 25 AND a.AGEMIN < 100")
+Set rs = conn.Execute("SELECT SWIMEVENTID, SWIMSTYLEID, GENDER, EVENTNUMBER FROM SWIMEVENT WHERE ROUND = 2 AND MASTERS = 'F'")
 Do While Not rs.EOF
     pEids(pCount) = CLng(rs("SWIMEVENTID"))
     pStyles(pCount) = CLng(rs("SWIMSTYLEID"))
@@ -90,46 +123,53 @@ For pi = 0 To pCount - 1
         finalEid = fi(0)
         finalEnum = fi(1)
 
-        ' Get Masters agegroup IDs for this prelim
-        agList = ""
-        Set rs = conn.Execute("SELECT AGEGROUPID FROM AGEGROUP WHERE SWIMEVENTID=" & pEids(pi) & " AND AGEMIN >= 25 AND AGEMIN < 100")
+        ' Get final event agegroups
+        fagCount = 0
+        Set rs = conn.Execute("SELECT AGEGROUPID, AGEMIN, AGEMAX FROM AGEGROUP WHERE SWIMEVENTID=" & finalEid & " AND AGEMIN >= 25 AND AGEMIN < 100")
         Do While Not rs.EOF
-            If agList <> "" Then agList = agList & ","
-            agList = agList & CLng(rs("AGEGROUPID"))
+            fagIds(fagCount) = CLng(rs("AGEGROUPID"))
+            fagMins(fagCount) = CInt(rs("AGEMIN"))
+            If IsNull(rs("AGEMAX")) Or CInt(rs("AGEMAX")) < 0 Then
+                fagMaxs(fagCount) = 999
+            Else
+                fagMaxs(fagCount) = CInt(rs("AGEMAX"))
+            End If
+            fagCount = fagCount + 1
             rs.MoveNext
         Loop
         rs.Close
 
-        If agList <> "" Then
-            ' Get final event agegroups
-            fagCount = 0
-            Set rs = conn.Execute("SELECT AGEGROUPID, AGEMIN, AGEMAX FROM AGEGROUP WHERE SWIMEVENTID=" & finalEid & " AND AGEMIN >= 25 AND AGEMIN < 100")
-            Do While Not rs.EOF
-                fagIds(fagCount) = CLng(rs("AGEGROUPID"))
-                fagMins(fagCount) = CInt(rs("AGEMIN"))
-                If IsNull(rs("AGEMAX")) Or CInt(rs("AGEMAX")) < 0 Then
-                    fagMaxs(fagCount) = 999
-                Else
-                    fagMaxs(fagCount) = CInt(rs("AGEMAX"))
-                End If
-                fagCount = fagCount + 1
-                rs.MoveNext
-            Loop
-            rs.Close
+        ' Get max heat
+        Set rs = conn.Execute("SELECT MAX(HEATNUMBER) AS MH FROM HEAT WHERE SWIMEVENTID=" & finalEid)
+        If IsNull(rs("MH")) Then maxHeat = 0 Else maxHeat = CInt(rs("MH"))
+        rs.Close
 
-            ' Get max heat number for final event
-            Set rs = conn.Execute("SELECT MAX(HEATNUMBER) AS MH FROM HEAT WHERE SWIMEVENTID=" & finalEid)
-            If IsNull(rs("MH")) Then maxHeat = 0 Else maxHeat = CInt(rs("MH"))
-            rs.Close
-
-            ' Get athletes with SWIMTIME > 0 in Masters brackets
-            srCount = 0
-            sql = "SELECT sr.SWIMRESULTID, sr.ATHLETEID, sr.SWIMTIME, sr.ENTRYTIME, sr.REACTIONTIME, sr.RESULTSTATUS, ath.BIRTHDATE FROM SWIMRESULT sr INNER JOIN ATHLETE ath ON ath.ATHLETEID = sr.ATHLETEID WHERE sr.SWIMEVENTID = " & pEids(pi) & " AND sr.AGEGROUPID IN (" & agList & ")"
-            Set rs = conn.Execute(sql)
-            Do While Not rs.EOF
-                stVal = rs("SWIMTIME")
-                If Not IsNull(stVal) Then
-                    If CLng(stVal) > 0 Then
+        ' Get Masters athletes with results
+        srCount = 0
+        If useBonus Then
+            sql = "SELECT sr.SWIMRESULTID, sr.ATHLETEID, sr.SWIMTIME, sr.ENTRYTIME, sr.REACTIONTIME, sr.RESULTSTATUS, ath.BIRTHDATE FROM SWIMRESULT sr INNER JOIN ATHLETE ath ON ath.ATHLETEID = sr.ATHLETEID WHERE sr.SWIMEVENTID = " & pEids(pi) & " AND sr.BONUSENTRY = 'T'"
+        Else
+            sql = "SELECT sr.SWIMRESULTID, sr.ATHLETEID, sr.SWIMTIME, sr.ENTRYTIME, sr.REACTIONTIME, sr.RESULTSTATUS, ath.BIRTHDATE FROM SWIMRESULT sr INNER JOIN ATHLETE ath ON ath.ATHLETEID = sr.ATHLETEID WHERE sr.SWIMEVENTID = " & pEids(pi) & " AND ath.BIRTHDATE IS NOT NULL"
+        End If
+        Set rs = conn.Execute(sql)
+        Do While Not rs.EOF
+            stVal = rs("SWIMTIME")
+            If Not IsNull(stVal) Then
+                If CLng(stVal) > 0 Then
+                    shouldInclude = False
+                    If useBonus Then
+                        shouldInclude = True
+                    Else
+                        ' Age-based: include if age >= 25
+                        If Not IsNull(rs("BIRTHDATE")) Then
+                            tmpAge = Year(ageDate) - Year(CDate(rs("BIRTHDATE")))
+                            If DateSerial(Year(ageDate), Month(CDate(rs("BIRTHDATE"))), Day(CDate(rs("BIRTHDATE")))) > ageDate Then
+                                tmpAge = tmpAge - 1
+                            End If
+                            If tmpAge >= 25 Then shouldInclude = True
+                        End If
+                    End If
+                    If shouldInclude Then
                         srIds(srCount) = CLng(rs("SWIMRESULTID"))
                         athIds(srCount) = CLng(rs("ATHLETEID"))
                         swimtimes(srCount) = CLng(stVal)
@@ -144,66 +184,62 @@ For pi = 0 To pCount - 1
                         srCount = srCount + 1
                     End If
                 End If
-                rs.MoveNext
-            Loop
-            rs.Close
+            End If
+            rs.MoveNext
+        Loop
+        rs.Close
 
-            If srCount > 0 Then
-                heatNum = maxHeat
-                laneNum = laneMax + 1
-                currentHeatId = -1
-                eventCount = 0
+        If srCount > 0 Then
+            heatNum = maxHeat
+            laneNum = laneMax + 1
+            currentHeatId = -1
+            eventCount = 0
 
-                For si = 0 To srCount - 1
-                    If Not IsNull(birthdates(si)) And birthdates(si) <> "" Then
-                        bdVal = CDate(birthdates(si))
-                        athleteAge = Year(ageDate) - Year(bdVal)
-                        If DateSerial(Year(ageDate), Month(bdVal), Day(bdVal)) > ageDate Then
-                            athleteAge = athleteAge - 1
-                        End If
-
-                        targetAGID = -1
-                        For ki = 0 To fagCount - 1
-                            If athleteAge >= fagMins(ki) And athleteAge <= fagMaxs(ki) Then
-                                targetAGID = fagIds(ki)
-                                Exit For
-                            End If
-                        Next
-
-                        If targetAGID > -1 Then
-                            ' Create heat if needed
-                            If laneNum > laneMax Then
-                                heatNum = heatNum + 1
-                                laneNum = laneMin
-                                conn.Execute "INSERT INTO HEAT (HEATID, SWIMEVENTID, HEATNUMBER) VALUES (" & nextUID & ", " & finalEid & ", " & heatNum & ")"
-                                currentHeatId = nextUID
-                                nextUID = nextUID + 1
-                                totalHeats = totalHeats + 1
-                            End If
-
-                            ' Insert into final
-                            conn.Execute "INSERT INTO SWIMRESULT (SWIMRESULTID, ATHLETEID, SWIMEVENTID, AGEGROUPID, HEATID, LANE, SWIMTIME, ENTRYTIME, ENTRYCOURSE, REACTIONTIME, RESULTSTATUS) VALUES (" & nextUID & ", " & athIds(si) & ", " & finalEid & ", " & targetAGID & ", " & currentHeatId & ", " & laneNum & ", " & swimtimes(si) & ", " & entrytimes(si) & ", 0, " & reactions(si) & ", " & statuses(si) & ")"
-                            nextUID = nextUID + 1
-                            laneNum = laneNum + 1
-                            totalTransferred = totalTransferred + 1
-
-                            ' Delete from prelim
-                            conn.Execute "DELETE FROM SWIMRESULT WHERE SWIMRESULTID = " & srIds(si)
-                            totalDeleted = totalDeleted + 1
-                            eventCount = eventCount + 1
-                        End If
+            For si = 0 To srCount - 1
+                If Not IsNull(birthdates(si)) And birthdates(si) <> "" Then
+                    bdVal = CDate(birthdates(si))
+                    athleteAge = Year(ageDate) - Year(bdVal)
+                    If DateSerial(Year(ageDate), Month(bdVal), Day(bdVal)) > ageDate Then
+                        athleteAge = athleteAge - 1
                     End If
-                Next
 
-                If eventCount > 0 Then
-                    WScript.Echo "  prelim #" & pEnums(pi) & " -> final #" & finalEnum & ": " & eventCount
+                    targetAGID = -1
+                    For ki = 0 To fagCount - 1
+                        If athleteAge >= fagMins(ki) And athleteAge <= fagMaxs(ki) Then
+                            targetAGID = fagIds(ki)
+                            Exit For
+                        End If
+                    Next
+
+                    If targetAGID > -1 Then
+                        If laneNum > laneMax Then
+                            heatNum = heatNum + 1
+                            laneNum = laneMin
+                            conn.Execute "INSERT INTO HEAT (HEATID, SWIMEVENTID, HEATNUMBER) VALUES (" & nextUID & ", " & finalEid & ", " & heatNum & ")"
+                            currentHeatId = nextUID
+                            nextUID = nextUID + 1
+                            totalHeats = totalHeats + 1
+                        End If
+
+                        conn.Execute "INSERT INTO SWIMRESULT (SWIMRESULTID, ATHLETEID, SWIMEVENTID, AGEGROUPID, HEATID, LANE, SWIMTIME, ENTRYTIME, ENTRYCOURSE, REACTIONTIME, RESULTSTATUS) VALUES (" & nextUID & ", " & athIds(si) & ", " & finalEid & ", " & targetAGID & ", " & currentHeatId & ", " & laneNum & ", " & swimtimes(si) & ", " & entrytimes(si) & ", 0, " & reactions(si) & ", " & statuses(si) & ")"
+                        nextUID = nextUID + 1
+                        laneNum = laneNum + 1
+                        totalTransferred = totalTransferred + 1
+
+                        conn.Execute "DELETE FROM SWIMRESULT WHERE SWIMRESULTID = " & srIds(si)
+                        totalDeleted = totalDeleted + 1
+                        eventCount = eventCount + 1
+                    End If
                 End If
+            Next
+
+            If eventCount > 0 Then
+                WScript.Echo "  prelim #" & pEnums(pi) & " -> final #" & finalEnum & ": " & eventCount
             End If
         End If
     End If
 Next
 
-' Update UID counter
 conn.Execute "UPDATE BSUIDTABLE SET LASTUID = " & (nextUID - 1) & " WHERE NAME='BS_GLOBAL_UID'"
 conn.Close
 

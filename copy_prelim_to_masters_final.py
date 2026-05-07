@@ -129,9 +129,9 @@ def main():
                    sr.ENTRYTIME, ath.BIRTHDATE
             FROM SWIMRESULT sr
             INNER JOIN ATHLETE ath ON ath.ATHLETEID = sr.ATHLETEID
-            WHERE sr.SWIMEVENTID = ? AND sr.AGEGROUPID IN ({placeholders})
+            WHERE sr.SWIMEVENTID = ? AND sr.BONUSENTRY = 'T'
               AND sr.SWIMTIME IS NOT NULL AND sr.SWIMTIME > 0
-        """, [prelim_eid] + ag_ids)
+        """, [prelim_eid])
         rows = c.fetchall()
         if not rows:
             continue

@@ -246,7 +246,7 @@ def run_loader(mode: str,
             mdb_in_staging = staging.dir / "template.mdb"
             if mdb_in_staging.exists():
                 z.write(mdb_in_staging, arcname="meet.mdb")
-        # Include masters_transfer.vbs + .bat and simulate_results for MDB and Lenex modes
+        # Include VBS scripts for MDB and Lenex modes
         if mode in ("mdb", "lenex"):
             for fname in ("masters_transfer.vbs", "masters_transfer.bat",
                           "simulate_results.vbs", "simulate_results.bat"):

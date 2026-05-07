@@ -1690,7 +1690,7 @@ def main():
         if cur is None or (cs is not None and (cur[0] is None or cs < cur[0])):
             best_by[(akey, ekey)] = (cs, ath.birthdate)
 
-    def _sr_row(sr_id, aid, eid, agid, cs):
+    def _sr_row(sr_id, aid, eid, agid, cs, is_masters=False):
         return {
             "SWIMRESULTID":  sr_id,
             "ATHLETEID":     aid,
@@ -1699,7 +1699,7 @@ def main():
             "ENTRYTIME":     cs,
             "ENTRYCOURSE":   0,
             "RESULTSTATUS":  0,
-            "BONUSENTRY":    "F",
+            "BONUSENTRY":    "T" if is_masters else "F",
             "DSQNOTIFIED":   "F",
             "FINALFIX":      "F",
             "LATEENTRY":     "F",
@@ -1718,24 +1718,25 @@ def main():
         ev = events_in_xlsx[ekey]
         athlete_age = age_at(bd)
 
-        # Masters individuals go to the non-Masters prelim (in a Masters
-        # bracket) so they swim alongside 15-18/Open.  The Masters final
-        # entry is created later by the "Transfert des temps" script.
+        # All athletes go to prelim. Masters are marked with BONUSENTRY='T'
+        # and transferred to finals by the VBS script after prelims.
+        # Exception: Masters-only events (no prelim exists) go directly to final.
         if ev.age_code == "MASTERS":
-            prelim_ev = template.find_prelim_for_dual_entry(
-                ev.uniqueid, ev.gender)
-            if prelim_ev is not None:
-                tevent = prelim_ev
-            else:
-                # No prelim with Masters bracket — fall back to Masters final
-                tevent = template.find_event(
-                    ev.uniqueid, ev.gender, masters=True)
+            # Try prelim first
+            tevent = template.find_event(ev.uniqueid, ev.gender, masters=False)
+            if tevent is None or tevent.masters:
+                # No non-Masters event — this is a Masters-only event (e.g. UID 541)
+                tevent = template.find_event(ev.uniqueid, ev.gender, masters=True)
         else:
             tevent = template.find_event(
                 ev.uniqueid, ev.gender, masters=False)
 
         # validation passed, so tevent is guaranteed
-        ag = pick_agegroup_for_individual(tevent, ev.age_code, athlete_age)
+        # Pick agegroup: prelim uses [19-99], Masters-only final uses 5-year bracket
+        if ev.age_code == "MASTERS" and tevent and not tevent.masters:
+            ag = pick_agegroup_for_individual(tevent, "OPEN", athlete_age)
+        else:
+            ag = pick_agegroup_for_individual(tevent, ev.age_code, athlete_age)
         if ag is None:
             # Only possible for Masters with no DOB — warn and skip
             if ev.age_code == "MASTERS":
@@ -1758,7 +1759,8 @@ def main():
                 stats["entry_time_faster"] += 1
         else:
             sr_id = db.next_id()
-            sr_batch.append(_sr_row(sr_id, aid, eid, ag.agegroup_id, cs))
+            sr_batch.append(_sr_row(sr_id, aid, eid, ag.agegroup_id, cs,
+                                    is_masters=(ev.age_code == "MASTERS")))
             stats["entry_new"] += 1
             existing_results[(aid, eid)] = (sr_id, cs)
 

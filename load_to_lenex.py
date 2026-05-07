@@ -216,7 +216,10 @@ def main():
             if ins.birthdate:
                 attrs["birthdate"] = ins.birthdate.strftime("%Y-%m-%d")
             if ins.license:
-                attrs["license"] = ins.license
+                # Suffix _MA if athlete has any Masters entries
+                is_masters = any(events_in_xlsx[ek].age_code == "MASTERS"
+                                 for (ak, ek), _ in best_by.items() if ak == akey)
+                attrs["license"] = ins.license + ("_MA" if is_masters else "")
             ath_xml = ET.SubElement(aths_xml, "ATHLETE", attrs)
 
             # Individual entries for this athlete
@@ -226,21 +229,22 @@ def main():
                 entries_xml = ET.SubElement(ath_xml, "ENTRIES")
                 for ekey, ms in my_entries:
                     ev = events_in_xlsx[ekey]
-                    # Masters individuals go to prelim (Masters bracket)
-                    if ev.age_code == "MASTERS":
-                        tevent = template.find_prelim_for_dual_entry(
-                            ev.uniqueid, ev.gender)
-                        if tevent is None:
-                            tevent = template.find_event(
-                                ev.uniqueid, ev.gender, masters=True)
-                    else:
-                        tevent = template.find_event(
-                            ev.uniqueid, ev.gender, masters=False)
+                    # All athletes go to prelim — Masters are marked via
+                    # _MA suffix and transferred after prelims by VBS
+                    tevent = template.find_event(
+                        ev.uniqueid, ev.gender, masters=False)
                     if tevent is None:
                         continue
                     athlete_age = age_at(ins.birthdate)
+                    # If the event is a prelim, Masters go to [19-99]
+                    # If it's a timed final (Masters-only event like UID 541),
+                    # use the actual Masters bracket
+                    if tevent.round == 2:
+                        ag_code = "OPEN" if ev.age_code == "MASTERS" else ev.age_code
+                    else:
+                        ag_code = ev.age_code
                     ag = pick_agegroup_for_individual(
-                        tevent, ev.age_code, athlete_age)
+                        tevent, ag_code, athlete_age)
                     if ag is None:
                         continue
                     entry_attrs = {
@@ -365,6 +369,10 @@ def main():
     else:
         out_path.write_text(xml_str, encoding="utf-8")
         print(f"  Written: {out_path}")
+
+    # Write masters NRAN list (for VBS mark_masters step)
+    # No longer needed — _MA suffix in LICENSE handles this
+    pass
 
     issues.report("Issues found while generating Lenex")
 

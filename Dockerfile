@@ -50,7 +50,7 @@ RUN mkdir -p /opt/ucanaccess \
 
 # App code (loaders + webapp)
 WORKDIR /app
-COPY load_to_mdb.py load_to_lenex.py copy_prelim_to_masters_final.py audit_pdf.py common.py masters_transfer.vbs masters_transfer.bat simulate_results.vbs simulate_results.bat template.mdb ./
+COPY load_to_mdb.py load_to_lenex.py copy_prelim_to_masters_final.py audit_pdf.py common.py masters_transfer.vbs masters_transfer.bat mark_masters.vbs mark_masters.bat simulate_results.vbs simulate_results.bat template.mdb ./
 COPY webapp ./webapp
 
 ARG BUILD_TIMESTAMP=""
