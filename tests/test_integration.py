@@ -392,14 +392,4 @@ class TestErrors:
 # ---------------------------------------------------------------------------
 # MANUAL SPLASH STEPS
 # ---------------------------------------------------------------------------
-# The full end-to-end workflow (including manual SPLASH steps between
-# automated runs) is documented in docs/MASTERS_TRANSFER.md under "Workflow".
-#
-# Quick reference:
-#   1. Import MDB/Lenex into SPLASH
-#   2. (Lenex only) Run masters_transfer.bat → marks _MA athletes
-#   3. Generate heats in SPLASH
-#   4. Run prelim races (or simulate_results.bat for testing)
-#   5. Run masters_transfer.bat → transfers Masters to finals
-#   6. Export PDF results from SPLASH
-#   7. Audit: curl -X POST /api/audit -F pdf=@results.pdf -F xlsx=@input.xlsx
+# See docs/MASTERS_TRANSFER.md for the full workflow including manual steps.

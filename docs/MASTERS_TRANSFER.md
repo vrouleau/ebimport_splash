@@ -80,6 +80,17 @@ Note: For the Lenex path, `masters_transfer.bat` is run **twice**:
 4. Run masters_transfer.bat (transfers Masters to finals)
 ```
 
+### Auditing Results
+```
+1. In SPLASH: Reports → Results → export PDF
+2. Audit the PDF against the original xlsx:
+   curl -X POST http://localhost:5000/api/audit -F pdf=@results.pdf -F xlsx=@input.xlsx
+3. Verify:
+   - Masters athletes appear in Masters final results with correct 5-year brackets
+   - Open athletes aged 25+ remain in Open results, not transferred
+   - All entry times preserved correctly
+```
+
 ## VBS Scripts Included in Output ZIP
 
 | Script | Purpose |
