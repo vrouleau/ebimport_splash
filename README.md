@@ -198,6 +198,28 @@ xlsx row number.
 
 ---
 
+## Auditing Results
+
+After exporting a results PDF from SPLASH, audit it against the source xlsx:
+
+```bash
+# Windows (from the output folder containing resultats.pdf)
+audit.bat resultats.pdf input.xlsx
+
+# Linux / piped
+curl -sS -X POST http://localhost:5000/api/audit \
+  -F pdf=@resultats.pdf -F xlsx=@input.xlsx | python3 scripts/format_audit.py
+```
+
+The audit checks:
+- No duplicate entries (same athlete, same event)
+- All xlsx athletes appear in the PDF
+- Swim times within ±5% of entry times
+- NT athletes placed in slowest heats
+- Seeding order within age brackets
+
+---
+
 ## Running Tests
 
 Integration tests run against the Docker container via HTTP:
