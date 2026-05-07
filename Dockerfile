@@ -50,8 +50,10 @@ RUN mkdir -p /opt/ucanaccess \
 
 # App code (loaders + webapp)
 WORKDIR /app
-COPY load_to_mdb.py load_to_lenex.py copy_prelim_to_masters_final.py audit_pdf.py common.py masters_transfer.vbs masters_transfer.bat mark_masters.vbs mark_masters.bat simulate_results.vbs simulate_results.bat template.mdb ./
+COPY src/ ./src/
+COPY scripts/ ./scripts/
 COPY webapp ./webapp
+COPY template.mdb ./
 
 ARG BUILD_TIMESTAMP=""
 RUN if [ -n "${BUILD_TIMESTAMP}" ]; then echo "${BUILD_TIMESTAMP}" > /app/BUILD_TIMESTAMP; \
@@ -61,8 +63,8 @@ RUN if [ -n "${BUILD_TIMESTAMP}" ]; then echo "${BUILD_TIMESTAMP}" > /app/BUILD_
 ENV UCANACCESS_DIR=/opt/ucanaccess
 # Shared staging dir for per-request temp files
 ENV STAGING_DIR=/tmp/ebimport_staging
-# Flask template resolution
-ENV PYTHONPATH=/app
+# Python path for imports
+ENV PYTHONPATH=/app/src:/app
 
 EXPOSE 5000
 

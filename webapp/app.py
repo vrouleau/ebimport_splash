@@ -34,11 +34,12 @@ from flask import (
 # --------------------------------------------------------------------------- #
 APP_DIR     = Path(__file__).parent.resolve()
 REPO_ROOT   = APP_DIR.parent
-MDB_LOADER  = REPO_ROOT / "load_to_mdb.py"
-LNX_LOADER  = REPO_ROOT / "load_to_lenex.py"
-COPY_SCRIPT = REPO_ROOT / "copy_prelim_to_masters_final.py"
-AUDIT_SCRIPT = REPO_ROOT / "audit_pdf.py"
+MDB_LOADER  = REPO_ROOT / "src" / "load_to_mdb.py"
+LNX_LOADER  = REPO_ROOT / "src" / "load_to_lenex.py"
+COPY_SCRIPT = REPO_ROOT / "src" / "copy_prelim_to_masters_final.py"
+AUDIT_SCRIPT = REPO_ROOT / "src" / "audit_pdf.py"
 DEFAULT_MDB = REPO_ROOT / "template.mdb"
+SCRIPTS_DIR = REPO_ROOT / "scripts"
 
 BUILD_TIMESTAMP = (REPO_ROOT / "BUILD_TIMESTAMP").read_text().strip() or "dev"
 
@@ -250,7 +251,7 @@ def run_loader(mode: str,
         if mode in ("mdb", "lenex"):
             for fname in ("masters_transfer.vbs", "masters_transfer.bat",
                           "simulate_results.vbs", "simulate_results.bat"):
-                fpath = REPO_ROOT / fname
+                fpath = SCRIPTS_DIR / fname
                 if fpath.exists():
                     z.write(fpath, arcname=fname)
         z.writestr("issues.txt", issues_txt)
