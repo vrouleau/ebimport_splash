@@ -390,41 +390,16 @@ class TestErrors:
 
 
 # ---------------------------------------------------------------------------
-# MANUAL SPLASH STEPS (documented for the full workflow)
+# MANUAL SPLASH STEPS
 # ---------------------------------------------------------------------------
-"""
-After the automated tests above, the full end-to-end workflow requires
-these manual steps in SPLASH Meet Manager on Windows:
-
-1. IMPORT
-   - MDB path: Open meet.mdb directly in SPLASH
-   - Lenex path: Import meet.lxf into SPLASH (File → Import → Lenex)
-
-2. MARK MASTERS (Lenex path only, first run of VBS)
-   - Run: masters_transfer.bat
-   - This detects _MA suffix → sets BONUSENTRY='T' → strips _MA from LICENSE
-   - Verify: SWIMRESULT table shows BONUSENTRY='T' for Masters athletes
-
-3. GENERATE HEATS
-   - In SPLASH: Events → select prelim events → Generate Heats
-   - Masters athletes appear in prelim heats alongside Open/15-18
-
-4. SIMULATE RESULTS (testing only)
-   - Run: simulate_results.bat
-   - Writes random SWIMTIME (±5% of ENTRYTIME) into SWIMRESULT + RELAY tables
-
-5. TRANSFER MASTERS TO FINALS
-   - Run: masters_transfer.bat (second run for Lenex path, first for MDB path)
-   - Transfers BONUSENTRY='T' athletes with SWIMTIME > 0 to Masters final events
-   - Creates heats in final events, deletes prelim rows
-
-6. GENERATE PDF RESULTS
-   - In SPLASH: Reports → Results → export PDF
-   - Use the audit endpoint to verify against the xlsx:
-     curl -X POST http://localhost:5000/api/audit -F pdf=@results.pdf -F xlsx=@input.xlsx
-
-7. VERIFY
-   - Masters athletes appear in Masters final results with correct 5-year brackets
-   - Open athletes aged 25+ remain in Open results, not transferred
-   - All entry times preserved correctly
-"""
+# The full end-to-end workflow (including manual SPLASH steps between
+# automated runs) is documented in docs/MASTERS_TRANSFER.md under "Workflow".
+#
+# Quick reference:
+#   1. Import MDB/Lenex into SPLASH
+#   2. (Lenex only) Run masters_transfer.bat → marks _MA athletes
+#   3. Generate heats in SPLASH
+#   4. Run prelim races (or simulate_results.bat for testing)
+#   5. Run masters_transfer.bat → transfers Masters to finals
+#   6. Export PDF results from SPLASH
+#   7. Audit: curl -X POST /api/audit -F pdf=@results.pdf -F xlsx=@input.xlsx
