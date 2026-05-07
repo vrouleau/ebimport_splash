@@ -37,7 +37,7 @@ def connect(mdb_path: str):
     jars = list(dict.fromkeys(jars))
     return jaydebeapi.connect(
         "net.ucanaccess.jdbc.UcanaccessDriver",
-        f"jdbc:ucanaccess://{mdb_path};openExclusive=false", [], jars)
+        f"jdbc:ucanaccess://{mdb_path};openExclusive=false;memory=true", [], jars)
 
 
 def age_at(birthdate, ref=AGE_DATE) -> int | None:
@@ -62,8 +62,7 @@ def main():
     args = ap.parse_args()
 
     conn = connect(args.mdb)
-    if args.dry_run:
-        conn.jconn.setAutoCommit(False)
+    conn.jconn.setAutoCommit(False)
     c = conn.cursor()
 
     # Get BS_GLOBAL_UID
@@ -270,9 +269,24 @@ def main():
         conn.rollback()
         print(f"\n  [DRY-RUN] — rolled back, no changes written.")
     else:
+        conn.commit()
         print(f"\n  Changes committed.")
 
     conn.close()
+
+    # Verify deletes persisted (UCanAccess has issues with some MDB files)
+    if not args.dry_run and prelim_rows_to_delete:
+        conn2 = connect(args.mdb)
+        c2 = conn2.cursor()
+        c2.execute(f"SELECT COUNT(*) FROM SWIMRESULT WHERE SWIMRESULTID IN "
+                   f"({','.join(str(x) for x in prelim_rows_to_delete)})")
+        remaining = int(c2.fetchone()[0])
+        conn2.close()
+        if remaining > 0:
+            print(f"\n  WARNING: {remaining} prelim row(s) could not be deleted")
+            print(f"  (UCanAccess limitation with this MDB file)")
+            print(f"  → Delete them manually in SPLASH: select the Masters")
+            print(f"    athletes in the prelim event and remove their entries.")
 
 
 if __name__ == "__main__":
