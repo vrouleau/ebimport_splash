@@ -23,6 +23,7 @@ import requests
 BASE_URL = os.environ.get("EBIMPORT_URL", "http://127.0.0.1:5000")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEST_XLSX = REPO_ROOT / "tests" / "test_attendees.xlsx"
+OUTPUT_DIR = REPO_ROOT / "tests" / "output"
 TIMEOUT = 120
 
 
@@ -80,14 +81,21 @@ def upload(mode: str, xlsx_path: Path) -> dict:
     return r.json()
 
 
-def download_zip(download_id: str) -> zipfile.ZipFile:
-    """Download result zip and return as ZipFile object."""
+def download_zip(download_id: str, save_as: str = None) -> zipfile.ZipFile:
+    """Download result zip and return as ZipFile object. Optionally save to OUTPUT_DIR."""
     r = requests.get(
         f"{BASE_URL}/api/download/{download_id}",
         params={"name": "result.zip"},
         timeout=30,
     )
     assert r.status_code == 200
+    if save_as:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        dest = OUTPUT_DIR / save_as
+        dest.write_bytes(r.content)
+        # Also extract for easy access
+        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+            z.extractall(OUTPUT_DIR / save_as.replace(".zip", ""))
     return zipfile.ZipFile(io.BytesIO(r.content))
 
 
@@ -147,7 +155,7 @@ class TestMDBPath:
     def mdb_result(self, test_xlsx):
         resp = upload("mdb", test_xlsx)
         assert resp["returncode"] == 0
-        z = download_zip(resp["download_id"])
+        z = download_zip(resp["download_id"], save_as="mdb_result.zip")
         return resp, z
 
     def test_zip_contains_mdb_and_scripts(self, mdb_result):
@@ -277,7 +285,7 @@ class TestLenexPath:
     def lenex_result(self, test_xlsx):
         resp = upload("lenex", test_xlsx)
         assert resp["returncode"] == 0
-        z = download_zip(resp["download_id"])
+        z = download_zip(resp["download_id"], save_as="lenex_result.zip")
         return resp, z
 
     def test_zip_contains_lxf_and_mdb(self, lenex_result):
