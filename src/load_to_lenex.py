@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Generate a Lenex 3.0 (.lef/.lxf) inscription file from an xlsx +
-a SPLASH .mdb template.  The .mdb is read-only (provides event structure);
-the output is a fresh Lenex file suitable for import into SPLASH.
+a template structure (JSON or .mdb).  The template is read-only (provides
+event structure); the output is a fresh Lenex file suitable for SPLASH
+"Import Entries".
 
 Usage:
+    python load_to_lenex.py --xlsx CPLC2026FINAL.xlsx --template template_struct.json --out meet.lxf
     python load_to_lenex.py --xlsx CPLC2026FINAL.xlsx --mdb template.mdb --out meet.lxf
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import sys
 import zipfile
 from pathlib import Path
@@ -23,10 +26,59 @@ from load_to_mdb import (
     pick_agegroup_for_individual, pick_agegroup_for_relay,
     norm_key, age_at, EventKey, Inscription,
     GENDER_MALE, GENDER_FEMALE, GENDER_MIXED,
+    TemplateEvent, TemplateAgeGroup, TemplateStyle,
 )
 from common import aggregate, run_sanity_checks, run_validation, run_cross_row_checks
 from collections import defaultdict
 import re
+
+
+class TemplateJSON:
+    """Lightweight template reader from a JSON export — same interface as TemplateIndex."""
+
+    def __init__(self, json_path: Path):
+        with open(json_path) as f:
+            data = json.load(f)
+
+        self.styles_by_uid: dict[int, TemplateStyle] = {}
+        for uid_str, s in data["styles"].items():
+            uid = int(uid_str)
+            self.styles_by_uid[uid] = TemplateStyle(
+                swim_style_id=0, uniqueid=uid, distance=s["distance"],
+                relay_count=s["relay_count"], name=s["name"])
+
+        self.events_by_uid_gender: dict[tuple, list[TemplateEvent]] = defaultdict(list)
+        self._all_events: list[TemplateEvent] = []
+        for e in data["events"]:
+            ags = [TemplateAgeGroup(
+                agegroup_id=a["id"], amin=a["min"], amax=a["max"], gender=a["g"]
+            ) for a in e["agegroups"]]
+            tev = TemplateEvent(
+                swim_event_id=e["eid"], swim_style_id=0,
+                uniqueid=e["uid"], gender=e["gender"],
+                event_number=e["enum"], round=e["round"], masters=e["masters"],
+                session_id=e["session"], agegroups=ags)
+            self.events_by_uid_gender[(e["uid"], e["gender"])].append(tev)
+            self._all_events.append(tev)
+
+    def find_event(self, uid: int, gender: int, masters: bool = False) -> TemplateEvent | None:
+        evs = self.events_by_uid_gender.get((uid, gender), [])
+        # Prefer matching masters flag
+        for e in evs:
+            if e.masters == masters:
+                return e
+        # Fallback
+        return evs[0] if evs else None
+
+    def find_prelim_for_dual_entry(self, uid: int, gender: int) -> TemplateEvent | None:
+        """Find non-Masters prelim with a Masters-style bracket (amin 25..99)."""
+        for e in self.events_by_uid_gender.get((uid, gender), []):
+            if e.masters or e.round != 2:
+                continue
+            for a in e.agegroups:
+                if a.amin is not None and 25 <= a.amin < 100:
+                    return e
+        return None
 
 # Lenex constants
 MEET_NAME   = "Championnats canadiens"
@@ -55,8 +107,10 @@ def lenex_gender(g: int) -> str:
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--xlsx", required=True, type=Path)
-    ap.add_argument("--mdb", required=True, type=Path,
-                    help="Template .mdb (read-only, provides event structure)")
+    ap.add_argument("--template", type=Path,
+                    help="Template JSON (preferred, no Java needed)")
+    ap.add_argument("--mdb", type=Path,
+                    help="Template .mdb (fallback, requires Java/UCanAccess)")
     ap.add_argument("--out", required=True, type=Path,
                     help="Output .lef (XML) or .lxf (zipped)")
     ap.add_argument("--zip", action="store_true",
@@ -65,27 +119,34 @@ def main():
 
     if not args.xlsx.exists():
         sys.exit(f"xlsx not found: {args.xlsx}")
-    if not args.mdb.exists():
-        sys.exit(f"mdb not found: {args.mdb}")
+    if not args.template and not args.mdb:
+        sys.exit("Provide --template (JSON) or --mdb (Access)")
 
     # Parse xlsx
     issues = IssueCollector()
     inscriptions = read_attendees(args.xlsx, issues)
     print(f"  {len(inscriptions)} race inscriptions")
 
-    # Open template (read-only — we never write)
-    db = MDB(args.mdb, dry_run=True)
-    template = TemplateIndex(db)
+    # Open template
+    if args.template and args.template.exists():
+        template = TemplateJSON(args.template)
+        db = None
+    elif args.mdb and args.mdb.exists():
+        db = MDB(args.mdb, dry_run=True)
+        template = TemplateIndex(db)
+    else:
+        sys.exit(f"template not found: {args.template or args.mdb}")
 
-    # Sanity checks
+    # Sanity checks (only for MDB-based template)
     import load_to_mdb
-    sanity_errors = run_sanity_checks(template)
-    if sanity_errors:
-        for e in sanity_errors:
-            print(f"  FATAL: {e}")
-        sys.exit(2)
+    if db:
+        sanity_errors = run_sanity_checks(template)
+        if sanity_errors:
+            for e in sanity_errors:
+                print(f"  FATAL: {e}")
+            sys.exit(2)
 
-    AGE_DATE = load_to_mdb.AGE_DATE
+    AGE_DATE = load_to_mdb.AGE_DATE or dt.date(2026, 12, 31)
 
     # Aggregate
     data = aggregate(inscriptions, issues)
@@ -102,7 +163,7 @@ def main():
         print("\n  FATAL: template/xlsx mismatch")
         for f in fatal:
             print(f"  - {f}")
-        db.close()
+        if db: db.close()
         sys.exit(2)
 
     # Cross-row checks
@@ -359,7 +420,7 @@ def main():
                             "athleteid": str(aid),
                         })
 
-    db.close()
+    if db: db.close()
 
     # --- Write output ---
     xml_str = minidom.parseString(

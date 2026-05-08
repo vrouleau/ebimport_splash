@@ -211,11 +211,10 @@ def run_loader(mode: str,
             result_file = out_mdb
     elif mode == "lenex":
         out_lxf = staging.dir / "meet.lxf"
-        mdb_copy = staging.dir / "template.mdb"
-        shutil.copy(user_mdb, mdb_copy)
+        template_json = REPO_ROOT / "template_struct.json"
         cmd = [sys.executable, str(LNX_LOADER),
                "--xlsx", str(xlsx_path),
-               "--mdb", str(mdb_copy),
+               "--template", str(template_json),
                "--out", str(out_lxf)]
         result_file = out_lxf
     else:
@@ -243,10 +242,8 @@ def run_loader(mode: str,
         if result_file is not None and result_file.exists():
             z.write(result_file, arcname=result_file.name)
         # Include the template mdb in lenex mode (as meet.mdb for consistency)
-        if mode == "lenex":
-            mdb_in_staging = staging.dir / "template.mdb"
-            if mdb_in_staging.exists():
-                z.write(mdb_in_staging, arcname="meet.mdb")
+        if mode == "lenex" and user_mdb and user_mdb.exists():
+            z.write(user_mdb, arcname="meet.mdb")
         # Include VBS scripts for MDB and Lenex modes
         if mode in ("mdb", "lenex"):
             for fname in ("masters_transfer.vbs", "masters_transfer.bat",

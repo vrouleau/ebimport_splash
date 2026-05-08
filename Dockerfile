@@ -53,7 +53,7 @@ WORKDIR /app
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY webapp ./webapp
-COPY template.mdb ./
+COPY template.mdb template_struct.json ./
 
 ARG BUILD_TIMESTAMP=""
 RUN if [ -n "${BUILD_TIMESTAMP}" ]; then echo "${BUILD_TIMESTAMP}" > /app/BUILD_TIMESTAMP; \
