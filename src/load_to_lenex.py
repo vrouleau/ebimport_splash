@@ -123,23 +123,18 @@ def main():
 
     # Open template — prefer meet .lxf
     db = None
+    template = None
     if args.meet and args.meet.exists():
         meet = parse_meet_lxf(args.meet)
         template = MeetLxfTemplate(meet)
     elif args.template and args.template.exists():
-        # Legacy JSON fallback
-        from meet_parser import parse_meet_lxf as _unused
-        import json as _json
-        with open(args.template) as f:
-            data = _json.load(f)
-        # Build a minimal MeetLxfTemplate-compatible object from JSON
-        # (backward compat — will be removed)
-        class _LegacyJSON:
-            pass
         sys.exit("--template is deprecated. Use --meet with a SPLASH meet export .lxf")
     elif args.mdb and args.mdb.exists():
         db = MDB(args.mdb, dry_run=True)
         template = TemplateIndex(db)
+    elif not args.meet:
+        # No meet file — parse-only validation (no event matching)
+        pass
     else:
         sys.exit("Provide --meet (SPLASH meet export .lxf)")
 
@@ -163,17 +158,28 @@ def main():
     ind_entries = data.ind_entries
     relay_squads = data.relay_squads
 
-    # Validation
-    fatal = run_validation(events_in_xlsx, template)
-    if fatal:
-        print("\n  FATAL: template/xlsx mismatch")
-        for f in fatal:
-            print(f"  - {f}")
-        if db: db.close()
-        sys.exit(2)
+    # Validation (requires template)
+    if template:
+        fatal = run_validation(events_in_xlsx, template)
+        if fatal:
+            print("\n  FATAL: template/xlsx mismatch")
+            for f in fatal:
+                print(f"  - {f}")
+            if db: db.close()
+            sys.exit(2)
 
-    # Cross-row checks
-    run_cross_row_checks(data, template, issues)
+    # Cross-row checks (requires template)
+    if template:
+        run_cross_row_checks(data, template, issues)
+
+    # If no template, stop here (parse-only validation)
+    if not template:
+        print(f"\n  {len(clubs)} clubs, {len(athletes)} athletes")
+        print(f"  {len(ind_entries)} individual entries")
+        print(f"  {sum(len(s) for s in relay_squads.values())} relay squads")
+        print(f"\n  (No meet .lxf — skipped event matching)")
+        if db: db.close()
+        sys.exit(0)
 
     # Dedup individual entries (keep best time)
     best_by: dict[tuple, int | None] = {}

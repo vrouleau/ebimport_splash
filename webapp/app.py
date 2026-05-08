@@ -191,14 +191,15 @@ def run_loader(mode: str,
     env = os.environ.copy()
     result_file: Path | None = None
 
-    if not meet_path:
-        raise ValueError("meet .lxf is required")
+    if not meet_path and mode == "lenex":
+        raise ValueError("meet .lxf is required for Lenex generation")
 
     if mode == "dry-run":
         cmd = [sys.executable, str(LNX_LOADER),
                "--xlsx", str(xlsx_path),
-               "--meet", str(meet_path),
                "--out", str(staging.dir / "meet.lxf")]
+        if meet_path:
+            cmd.extend(["--meet", str(meet_path)])
     elif mode == "lenex":
         out_lxf = staging.dir / "inscriptions.lxf"
         cmd = [sys.executable, str(LNX_LOADER),
@@ -321,7 +322,7 @@ def api_run():
         return jsonify({"error": "Aucun fichier xlsx reçu."}), 400
 
     meet_file = request.files.get("meet")
-    if meet_file is None or not meet_file.filename:
+    if mode == "lenex" and (meet_file is None or not meet_file.filename):
         return jsonify({"error": "Aucun fichier meet .lxf reçu."}), 400
 
     staging = _new_staging()
@@ -331,12 +332,15 @@ def api_run():
         if xlsx_path.stat().st_size > MAX_XLSX_BYTES:
             return jsonify({"error": "Fichier xlsx trop volumineux."}), 413
 
-        meet_path = staging.dir / "meet_struct.lxf"
-        meet_file.save(meet_path)
+        meet_path = None
+        if meet_file and meet_file.filename:
+            meet_path = staging.dir / "meet_struct.lxf"
+            meet_file.save(meet_path)
 
         parsed = run_loader(mode, xlsx_path, staging, meet_path=meet_path)
         xlsx_path.unlink(missing_ok=True)
-        meet_path.unlink(missing_ok=True)
+        if meet_path:
+            meet_path.unlink(missing_ok=True)
         return jsonify(parsed)
     except subprocess.TimeoutExpired:
         _drop_staging(staging.id)
