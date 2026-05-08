@@ -252,7 +252,7 @@ def _parse_teammates(raw: str | None) -> list[str]:
         line = line.strip()
         if not line or re.match(r"^\(.*\)$", line):
             continue
-        tokens = line.split()
+        tokens = [t.strip(",") for t in line.split()]
         while len(tokens) > 2:
             last = tokens[-1]
             if re.match(r"^[A-Z0-9]{3,8}$", last):
