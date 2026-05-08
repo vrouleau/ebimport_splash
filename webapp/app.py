@@ -183,26 +183,27 @@ def parse_loader_output(text: str) -> dict:
 def run_loader(mode: str,
                xlsx_path: Path,
                staging: Staging,
-               user_mdb: Path = None) -> dict:
+               meet_path: Path = None) -> dict:
     """Run the appropriate loader and return parsed output.
 
     mode: 'dry-run' | 'lenex'
     """
     env = os.environ.copy()
-
     result_file: Path | None = None
-    meet_lxf = REPO_ROOT / "meet.lxf"
+
+    if not meet_path:
+        raise ValueError("meet .lxf is required")
 
     if mode == "dry-run":
         cmd = [sys.executable, str(LNX_LOADER),
                "--xlsx", str(xlsx_path),
-               "--meet", str(meet_lxf),
+               "--meet", str(meet_path),
                "--out", str(staging.dir / "meet.lxf")]
     elif mode == "lenex":
-        out_lxf = staging.dir / "meet.lxf"
+        out_lxf = staging.dir / "inscriptions.lxf"
         cmd = [sys.executable, str(LNX_LOADER),
                "--xlsx", str(xlsx_path),
-               "--meet", str(meet_lxf),
+               "--meet", str(meet_path),
                "--out", str(out_lxf)]
         result_file = out_lxf
     else:
@@ -319,6 +320,10 @@ def api_run():
     if xlsx is None or not xlsx.filename:
         return jsonify({"error": "Aucun fichier xlsx reçu."}), 400
 
+    meet_file = request.files.get("meet")
+    if meet_file is None or not meet_file.filename:
+        return jsonify({"error": "Aucun fichier meet .lxf reçu."}), 400
+
     staging = _new_staging()
     try:
         xlsx_path = staging.dir / "input.xlsx"
@@ -326,8 +331,12 @@ def api_run():
         if xlsx_path.stat().st_size > MAX_XLSX_BYTES:
             return jsonify({"error": "Fichier xlsx trop volumineux."}), 413
 
-        parsed = run_loader(mode, xlsx_path, staging)
+        meet_path = staging.dir / "meet_struct.lxf"
+        meet_file.save(meet_path)
+
+        parsed = run_loader(mode, xlsx_path, staging, meet_path=meet_path)
         xlsx_path.unlink(missing_ok=True)
+        meet_path.unlink(missing_ok=True)
         return jsonify(parsed)
     except subprocess.TimeoutExpired:
         _drop_staging(staging.id)

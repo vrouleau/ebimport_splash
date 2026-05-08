@@ -22,7 +22,6 @@ Thumbs.db
 *.accdb
 *.lef
 *.lxf
-!meet.lxf
 *.xlsx
 
 # but DO commit the synthetic test fixture

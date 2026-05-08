@@ -8,5 +8,4 @@ __pycache__/
 *.mdb
 *.lef
 *.lxf
-!meet.lxf
 *.xlsx

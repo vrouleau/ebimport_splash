@@ -18,10 +18,14 @@
 
     <form id="run-form">
       <fieldset>
-        <legend>Fichier source</legend>
+        <legend>Fichiers source</legend>
         <label>
           Fichier Excel (onglet <em>Attendees</em>) :
           <input type="file" name="xlsx" accept=".xlsx" required>
+        </label>
+        <label>
+          Structure de la compétition (<code>.lxf</code> exporté de SPLASH) :
+          <input type="file" name="meet" accept=".lxf" required>
         </label>
       </fieldset>
 
