@@ -191,18 +191,18 @@ def run_loader(mode: str,
     env = os.environ.copy()
 
     result_file: Path | None = None
-    template_json = REPO_ROOT / "template_struct.json"
+    meet_lxf = REPO_ROOT / "meet.lxf"
 
     if mode == "dry-run":
         cmd = [sys.executable, str(LNX_LOADER),
                "--xlsx", str(xlsx_path),
-               "--template", str(template_json),
+               "--meet", str(meet_lxf),
                "--out", str(staging.dir / "meet.lxf")]
     elif mode == "lenex":
         out_lxf = staging.dir / "meet.lxf"
         cmd = [sys.executable, str(LNX_LOADER),
                "--xlsx", str(xlsx_path),
-               "--template", str(template_json),
+               "--meet", str(meet_lxf),
                "--out", str(out_lxf)]
         result_file = out_lxf
     else:

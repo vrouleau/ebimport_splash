@@ -6,7 +6,7 @@ tests/
 __pycache__/
 *.pyc
 *.mdb
-!template.mdb
 *.lef
 *.lxf
+!meet.lxf
 *.xlsx

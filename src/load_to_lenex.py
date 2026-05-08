@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """Generate a Lenex 3.0 (.lef/.lxf) inscription file from an xlsx +
-a template structure (JSON or .mdb).  The template is read-only (provides
-event structure); the output is a fresh Lenex file suitable for SPLASH
-"Import Entries".
+a meet structure (.lxf exported from SPLASH).
 
 Usage:
-    python load_to_lenex.py --xlsx CPLC2026FINAL.xlsx --template template_struct.json --out meet.lxf
-    python load_to_lenex.py --xlsx CPLC2026FINAL.xlsx --mdb template.mdb --out meet.lxf
+    python load_to_lenex.py --xlsx CPLC2026FINAL.xlsx --meet splash_results_meet.lxf --out meet.lxf
 """
 from __future__ import annotations
 
@@ -19,7 +16,6 @@ from pathlib import Path
 from xml.dom import minidom
 from xml.etree import ElementTree as ET
 
-# Reuse parser, TemplateIndex, and helpers from the MDB loader
 sys.path.insert(0, str(Path(__file__).parent))
 from load_to_mdb import (
     read_attendees, IssueCollector, TemplateIndex, MDB,
@@ -29,49 +25,49 @@ from load_to_mdb import (
     TemplateEvent, TemplateAgeGroup, TemplateStyle,
 )
 from common import aggregate, run_sanity_checks, run_validation, run_cross_row_checks
+from meet_parser import parse_meet_lxf, ParsedMeet
 from collections import defaultdict
 import re
 
 
-class TemplateJSON:
-    """Lightweight template reader from a JSON export — same interface as TemplateIndex."""
+class MeetLxfTemplate:
+    """Adapter: wraps ParsedMeet to provide the same interface as TemplateIndex/TemplateJSON."""
 
-    def __init__(self, json_path: Path):
-        with open(json_path) as f:
-            data = json.load(f)
-
+    def __init__(self, meet: ParsedMeet):
+        self._meet = meet
         self.styles_by_uid: dict[int, TemplateStyle] = {}
-        for uid_str, s in data["styles"].items():
-            uid = int(uid_str)
-            self.styles_by_uid[uid] = TemplateStyle(
-                swim_style_id=0, uniqueid=uid, distance=s["distance"],
-                relay_count=s["relay_count"], name=s["name"])
-
         self.events_by_uid_gender: dict[tuple, list[TemplateEvent]] = defaultdict(list)
-        self._all_events: list[TemplateEvent] = []
-        for e in data["events"]:
+
+        for ev in meet.all_events:
+            uid = ev.swimstyleid
+            if uid not in self.styles_by_uid:
+                self.styles_by_uid[uid] = TemplateStyle(
+                    swim_style_id=0, uniqueid=uid,
+                    distance=ev.distance, relay_count=ev.relaycount,
+                    name=ev.style_name)
+
             ags = [TemplateAgeGroup(
-                agegroup_id=a["id"], amin=a["min"], amax=a["max"], gender=a["g"]
-            ) for a in e["agegroups"]]
+                agegroup_id=ag.agegroupid, amin=ag.agemin, amax=ag.agemax, gender=ev.gender_int
+            ) for ag in ev.agegroups]
+
             tev = TemplateEvent(
-                swim_event_id=e["eid"], swim_style_id=0,
-                uniqueid=e["uid"], gender=e["gender"],
-                event_number=e["enum"], round=e["round"], masters=e["masters"],
-                session_id=e["session"], agegroups=ags)
-            self.events_by_uid_gender[(e["uid"], e["gender"])].append(tev)
-            self._all_events.append(tev)
+                swim_event_id=ev.eventid, swim_style_id=0,
+                uniqueid=uid, gender=ev.gender_int,
+                event_number=ev.number,
+                round=2 if ev.is_prelim else (1 if ev.round == "TIM" else 9),
+                masters=ev.is_masters,
+                session_id=None,
+                agegroups=ags)
+            self.events_by_uid_gender[(uid, ev.gender_int)].append(tev)
 
     def find_event(self, uid: int, gender: int, masters: bool = False) -> TemplateEvent | None:
         evs = self.events_by_uid_gender.get((uid, gender), [])
-        # Prefer matching masters flag
         for e in evs:
             if e.masters == masters:
                 return e
-        # Fallback
         return evs[0] if evs else None
 
     def find_prelim_for_dual_entry(self, uid: int, gender: int) -> TemplateEvent | None:
-        """Find non-Masters prelim with a Masters-style bracket (amin 25..99)."""
         for e in self.events_by_uid_gender.get((uid, gender), []):
             if e.masters or e.round != 2:
                 continue
@@ -107,35 +103,45 @@ def lenex_gender(g: int) -> str:
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--xlsx", required=True, type=Path)
+    ap.add_argument("--meet", type=Path,
+                    help="Meet structure .lxf (exported from SPLASH)")
     ap.add_argument("--template", type=Path,
-                    help="Template JSON (preferred, no Java needed)")
+                    help="(deprecated) Template JSON")
     ap.add_argument("--mdb", type=Path,
-                    help="Template .mdb (fallback, requires Java/UCanAccess)")
-    ap.add_argument("--out", required=True, type=Path,
-                    help="Output .lef (XML) or .lxf (zipped)")
-    ap.add_argument("--zip", action="store_true",
-                    help="Force ZIP output (.lxf)")
+                    help="(deprecated) Template .mdb")
+    ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--zip", action="store_true")
     args = ap.parse_args()
 
     if not args.xlsx.exists():
         sys.exit(f"xlsx not found: {args.xlsx}")
-    if not args.template and not args.mdb:
-        sys.exit("Provide --template (JSON) or --mdb (Access)")
 
     # Parse xlsx
     issues = IssueCollector()
     inscriptions = read_attendees(args.xlsx, issues)
     print(f"  {len(inscriptions)} race inscriptions")
 
-    # Open template
-    if args.template and args.template.exists():
-        template = TemplateJSON(args.template)
-        db = None
+    # Open template — prefer meet .lxf
+    db = None
+    if args.meet and args.meet.exists():
+        meet = parse_meet_lxf(args.meet)
+        template = MeetLxfTemplate(meet)
+    elif args.template and args.template.exists():
+        # Legacy JSON fallback
+        from meet_parser import parse_meet_lxf as _unused
+        import json as _json
+        with open(args.template) as f:
+            data = _json.load(f)
+        # Build a minimal MeetLxfTemplate-compatible object from JSON
+        # (backward compat — will be removed)
+        class _LegacyJSON:
+            pass
+        sys.exit("--template is deprecated. Use --meet with a SPLASH meet export .lxf")
     elif args.mdb and args.mdb.exists():
         db = MDB(args.mdb, dry_run=True)
         template = TemplateIndex(db)
     else:
-        sys.exit(f"template not found: {args.template or args.mdb}")
+        sys.exit("Provide --meet (SPLASH meet export .lxf)")
 
     # Sanity checks (only for MDB-based template)
     import load_to_mdb

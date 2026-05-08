@@ -19,7 +19,7 @@ WORKDIR /app
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY webapp ./webapp
-COPY template_struct.json ./
+COPY meet.lxf ./
 
 ARG BUILD_TIMESTAMP=""
 RUN if [ -n "${BUILD_TIMESTAMP}" ]; then echo "${BUILD_TIMESTAMP}" > /app/BUILD_TIMESTAMP; \
