@@ -189,28 +189,11 @@ def run_cross_row_checks(data: AggregatedData, template: TemplateIndex,
     relay_squads = data.relay_squads
     clubs = data.clubs
 
-    # No DOB — skip if athlete only appears in 15-18 relay teams
+    # No DOB
     for akey, ins in athletes.items():
         if ins.birthdate is None:
-            # Check if they have any individual entries
-            has_individual = any(ak == akey for ak, _, _ in data.ind_entries)
-            if has_individual:
-                issues.warn("no_dob",
-                    f"{ins.first} {ins.last} ({ins.club}) has no birthdate")
-                continue
-            # Check relay squads — only warn if in non-1518 relays
-            in_non_1518_relay = False
-            for (cnorm, ekey), squads in relay_squads.items():
-                if ekey[0] != "1518":  # age_code
-                    for squad in squads:
-                        if any(ak == akey for ak, _ in squad):
-                            in_non_1518_relay = True
-                            break
-                if in_non_1518_relay:
-                    break
-            if in_non_1518_relay:
-                issues.warn("no_dob",
-                    f"{ins.first} {ins.last} ({ins.club}) has no birthdate")
+            issues.warn("no_dob",
+                f"{ins.first} {ins.last} ({ins.club}) has no birthdate")
 
     # Individual age bracket mismatch
     for akey, ekey, _ in data.ind_entries:
