@@ -17,7 +17,7 @@ from xml.dom import minidom
 from xml.etree import ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).parent))
-from load_to_mdb import (
+from core import (
     read_attendees, IssueCollector, TemplateIndex, MDB,
     pick_agegroup_for_individual, pick_agegroup_for_relay,
     norm_key, age_at, EventKey, Inscription,
@@ -139,7 +139,7 @@ def main():
         sys.exit("Provide --meet (SPLASH meet export .lxf)")
 
     # Sanity checks (only for MDB-based template)
-    import load_to_mdb
+    import core
     if db:
         sanity_errors = run_sanity_checks(template)
         if sanity_errors:
@@ -147,7 +147,7 @@ def main():
                 print(f"  FATAL: {e}")
             sys.exit(2)
 
-    AGE_DATE = load_to_mdb.AGE_DATE or dt.date(2026, 12, 31)
+    AGE_DATE = core.AGE_DATE or dt.date(2026, 12, 31)
 
     # Aggregate
     data = aggregate(inscriptions, issues)

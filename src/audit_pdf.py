@@ -24,7 +24,7 @@ import fitz  # PyMuPDF
 
 # Allow importing from same directory
 sys.path.insert(0, str(Path(__file__).parent))
-from load_to_mdb import read_attendees, IssueCollector
+from core import read_attendees, IssueCollector
 
 
 # --------------------------------------------------------------------------- #

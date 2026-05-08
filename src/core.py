@@ -1227,10 +1227,7 @@ class TemplateIndex:
                                    int(m.group(1)[6:8]))
                 break
         # Also set on the module by name (handles __main__ vs import)
-        import sys
-        mod = sys.modules.get("load_to_mdb")
-        if mod is not None and mod is not sys.modules.get(__name__):
-            mod.AGE_DATE = AGE_DATE
+        pass
 
     @property
     def is_first_run(self) -> bool:

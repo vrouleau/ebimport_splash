@@ -13,7 +13,7 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 
-from load_to_mdb import (
+from core import (
     Inscription, EventKey, IssueCollector, TemplateIndex,
     norm_key, age_at, TICKET_UID,
     GENDER_MALE, GENDER_FEMALE,
@@ -119,7 +119,7 @@ def aggregate(inscriptions: list[Inscription],
 
 def run_sanity_checks(template: TemplateIndex) -> list[str]:
     """Return list of fatal errors if template is incompatible. Empty = OK."""
-    import load_to_mdb
+    import core
     fatals = []
     missing_uids = [uid for uid in set(TICKET_UID.values())
                     if uid not in template.styles_by_uid]
@@ -127,7 +127,7 @@ def run_sanity_checks(template: TemplateIndex) -> list[str]:
         fatals.append(
             f"TICKET_UID references UIDs not in template SWIMSTYLE: "
             f"{sorted(missing_uids)}")
-    if load_to_mdb.AGE_DATE is None:
+    if core.AGE_DATE is None:
         fatals.append("Could not read AGEDATE from BSGLOBAL.MEETVALUES")
     return fatals
 
