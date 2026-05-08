@@ -283,4 +283,9 @@ def _resolve_teammate(name_norm: str, name_to_key: dict) -> tuple | None:
             parts = key.split()
             if len(parts) >= 2 and parts[-1] == last and parts[0].startswith(first):
                 return name_to_key[key]
+    # First+last fallback: "luis ismail gana-akkor" -> "luis gana-akkor"
+    if len(tokens) >= 3:
+        first_last = f"{tokens[0]} {tokens[-1]}"
+        if first_last in name_to_key:
+            return name_to_key[first_last]
     return None
