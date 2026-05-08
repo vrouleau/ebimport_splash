@@ -95,9 +95,15 @@
           box.appendChild(hdr);
           if (data.items && data.items.length) {
             const ul = document.createElement("ul");
-            for (const it of data.items) {
+            for (const it of data.items.slice(0, 10)) {
               const li = document.createElement("li");
               li.textContent = it.message + (it.row ? ` (ligne ${it.row})` : "");
+              ul.appendChild(li);
+            }
+            if (data.items.length > 10) {
+              const li = document.createElement("li");
+              li.textContent = `… et ${data.items.length - 10} de plus`;
+              li.style.fontStyle = "italic";
               ul.appendChild(li);
             }
             box.appendChild(ul);
