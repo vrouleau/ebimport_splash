@@ -287,9 +287,9 @@ def main():
                     ages = [age_at(athletes[ak].birthdate)
                             for ak, _ in squad[:relay_size]]
                     age_sum = sum(a for a in ages if a is not None) if all(a is not None for a in ages) else None
-                    oldest = max((a for a in ages if a is not None), default=None)
+                    youngest = min((a for a in ages if a is not None), default=None)
                     ag = pick_agegroup_for_relay(
-                        tevent, ev.age_code, age_sum, oldest_age=oldest)
+                        tevent, ev.age_code, age_sum, oldest_age=youngest)
                     if ag is None:
                         continue
 

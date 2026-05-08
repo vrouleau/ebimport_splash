@@ -1336,9 +1336,10 @@ def pick_agegroup_for_relay(
                 if lo <= squad_age_sum <= hi:
                     return a
         else:
-            # Individual-style brackets — route by oldest member's age
+            # Individual-style brackets — route by youngest member's age
             if oldest_age is None:
                 return None
+            youngest = oldest_age  # caller passes youngest_age in this param
             for a in event.agegroups:
                 if a.amin is None or a.amax is None:
                     continue
@@ -1346,7 +1347,7 @@ def pick_agegroup_for_relay(
                     continue
                 lo = a.amin
                 hi = 10**9 if a.amax < 0 else a.amax
-                if lo <= oldest_age <= hi:
+                if lo <= youngest <= hi:
                     return a
     return None
 
@@ -1819,9 +1820,9 @@ def main():
                     stats["masters_skipped_no_dob"] += 1
                     continue
                 age_sum = sum(ages)
-                oldest_age = max(ages)
+                youngest_age = min(ages)
             ag = pick_agegroup_for_relay(tevent, ev.age_code, age_sum,
-                                         oldest_age=oldest_age)
+                                         oldest_age=youngest_age if ev.age_code == "MASTERS" else None)
             if ag is None:
                 issues.warn("relay_skipped",
                     f"{clubs[cnorm]} relay UID {ev.uniqueid} "
