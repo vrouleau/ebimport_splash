@@ -178,6 +178,7 @@ def main():
         print(f"  {len(ind_entries)} individual entries")
         print(f"  {sum(len(s) for s in relay_squads.values())} relay squads")
         print(f"\n  (No meet .lxf — skipped event matching)")
+        issues.report("Issues found while validating")
         if db: db.close()
         sys.exit(0)
 
