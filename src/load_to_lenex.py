@@ -313,10 +313,17 @@ def main():
                         rel_amin, rel_amax = 19, 99
                         rel_totalmin, rel_totalmax = -1, -1
                     else:
-                        # Masters relay on Masters final — age-sum brackets
-                        rel_amin, rel_amax = -1, -1
-                        rel_totalmin = ag.amin if ag.amin is not None else -1
-                        rel_totalmax = ag.amax if ag.amax is not None else -1
+                        # Masters relay on Masters final
+                        if ag.amin is not None and ag.amin < 100:
+                            # Individual-style brackets (Corde duo)
+                            rel_amin = ag.amin if ag.amin is not None else -1
+                            rel_amax = ag.amax if ag.amax is not None else -1
+                            rel_totalmin, rel_totalmax = -1, -1
+                        else:
+                            # Age-sum brackets
+                            rel_amin, rel_amax = -1, -1
+                            rel_totalmin = ag.amin if ag.amin is not None else -1
+                            rel_totalmax = ag.amax if ag.amax is not None else -1
                     rel_attrs = {
                         "number": str(team_no),
                         "name": relay_name[:50],
