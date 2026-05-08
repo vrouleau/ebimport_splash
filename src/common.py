@@ -276,4 +276,11 @@ def _resolve_teammate(name_norm: str, name_to_key: dict) -> tuple | None:
         attempt = " ".join(tokens)
         if attempt in name_to_key:
             return name_to_key[attempt]
+    # Prefix match: "phil skinder" -> "philip skinder"
+    if len(tokens) == 2:
+        first, last = tokens
+        for key in name_to_key:
+            parts = key.split()
+            if len(parts) >= 2 and parts[-1] == last and parts[0].startswith(first):
+                return name_to_key[key]
     return None
