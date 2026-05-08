@@ -288,4 +288,9 @@ def _resolve_teammate(name_norm: str, name_to_key: dict) -> tuple | None:
         first_last = f"{tokens[0]} {tokens[-1]}"
         if first_last in name_to_key:
             return name_to_key[first_last]
+    # Reversed name: "barter ying" -> "ying barter"
+    if len(tokens) == 2:
+        reversed_name = f"{tokens[1]} {tokens[0]}"
+        if reversed_name in name_to_key:
+            return name_to_key[reversed_name]
     return None
