@@ -19,15 +19,15 @@
     <form id="run-form">
       <fieldset>
         <legend>Fichiers source</legend>
-        <label>
+        <label style="display:block; margin-bottom:0.5rem">
           Fichier Excel (onglet <em>Attendees</em>) :
           <input type="file" name="xlsx" accept=".xlsx" required>
         </label>
-        <label>
+        <label style="display:block">
           Structure de la compétition (<code>.lxf</code> exporté de SPLASH) :
           <input type="file" name="meet" accept=".lxf">
-          <span class="hint">Requis pour générer le Lenex. Optionnel pour la validation seule.</span>
         </label>
+        <p class="hint">Requis pour générer le Lenex. Optionnel pour la validation seule.</p>
       </fieldset>
 
       <fieldset>
