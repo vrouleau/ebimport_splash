@@ -178,7 +178,7 @@ def main():
         print(f"  {len(ind_entries)} individual entries")
         print(f"  {sum(len(s) for s in relay_squads.values())} relay squads")
         print(f"\n  (No meet .lxf — skipped event matching)")
-        issues.report("Issues found while validating")
+        issues.report("Issues found while validating", full=True)
         if db: db.close()
         sys.exit(0)
 
@@ -455,7 +455,7 @@ def main():
     # No longer needed — _MA suffix in LICENSE handles this
     pass
 
-    issues.report("Issues found while generating Lenex")
+    issues.report("Issues found while generating Lenex", full=True)
 
 
 if __name__ == "__main__":
