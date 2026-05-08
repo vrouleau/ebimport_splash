@@ -134,51 +134,6 @@
   });
 })();
 
-// --- Copy Masters section ---
-(function() {
-  const form   = document.getElementById("copy-form");
-  const status = document.getElementById("copy-status");
-  const goBtn  = document.getElementById("copy-go");
-  const results = document.getElementById("copy-results");
-  const output = document.getElementById("copy-output");
-  const dlP    = document.getElementById("copy-dl");
-  const dlLink = document.getElementById("copy-dl-link");
-
-  form.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    goBtn.disabled = true;
-    status.textContent = "En cours…";
-    status.className = "status";
-    results.hidden = true;
-    dlP.hidden = true;
-    output.textContent = "";
-
-    const fd = new FormData(form);
-    try {
-      const resp = await fetch("/api/copy-masters", {method: "POST", body: fd});
-      const payload = await resp.json();
-      if (!resp.ok) {
-        status.textContent = payload.error || `Erreur HTTP ${resp.status}`;
-        status.className = "status error";
-        return;
-      }
-      status.textContent = payload.dry_run
-        ? "Simulation terminée." : "Transfert terminé.";
-      results.hidden = false;
-      output.textContent = payload.output || "(aucune sortie)";
-      if (payload.download_id) {
-        dlP.hidden = false;
-        dlLink.href = `/api/download/${payload.download_id}?name=masters-final.zip`;
-      }
-    } catch (e) {
-      status.textContent = `Erreur réseau: ${e.message}`;
-      status.className = "status error";
-    } finally {
-      goBtn.disabled = false;
-    }
-  });
-})();
-
 // --- PDF Audit ---
 (() => {
   const auditForm = document.getElementById("audit-form");

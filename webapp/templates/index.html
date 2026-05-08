@@ -10,11 +10,10 @@
   <main>
     <h1>ebimport_splash</h1>
     <p class="lede">
-      Ajout des inscriptions à une base SPLASH Meet Manager
-      (<code>.mdb</code>) à partir d'un fichier Excel Eventbrite.
-      La structure des épreuves (styles, événements, groupes d'âge,
-      sessions) doit déjà exister dans la base <code>.mdb</code> ;
-      l'outil ne fait qu'y ajouter les clubs, athlètes et entrées.
+      Génération d'un fichier Lenex d'inscriptions pour SPLASH Meet Manager
+      à partir d'un fichier Excel Eventbrite.
+      Importez le fichier <code>.lxf</code> résultant dans SPLASH via
+      « Fichier → Importer → Entrées Lenex ».
     </p>
 
     <form id="run-form">
@@ -31,34 +30,14 @@
         <label>
           <input type="radio" name="mode" value="dry-run" checked>
           <strong>Validation seulement</strong>
-          — analyse le fichier Excel sans rien écrire ; renvoie la liste
+          — analyse le fichier Excel sans rien générer ; renvoie la liste
           des problèmes détectés.
-        </label>
-        <label>
-          <input type="radio" name="mode" value="mdb">
-          <strong>Charger dans la base <code>.mdb</code></strong>
-          — ajoute les inscriptions dans la base SPLASH fournie.
         </label>
         <label>
           <input type="radio" name="mode" value="lenex">
           <strong>Générer un fichier Lenex (<code>.lxf</code>)</strong>
           — produit un fichier d'inscriptions importable dans SPLASH.
         </label>
-      </fieldset>
-
-      <fieldset id="mdb-opts">
-        <legend>Fichier <code>.mdb</code> SPLASH</legend>
-        <label>
-          Base <code>.mdb</code> (modèle ou en cours de remplissage) :
-          <input type="file" name="mdb" accept=".mdb">
-        </label>
-        <p class="hint">
-          <strong>Optionnel.</strong> Si laissé vide, le modèle
-          Championnats canadiens intégré est utilisé.
-          La structure des épreuves (styles, événements, groupes d'âge,
-          sessions) est prise telle quelle depuis ce fichier — le
-          chargeur n'ajoute que les clubs, athlètes et inscriptions.
-        </p>
       </fieldset>
 
       <div class="actions">
@@ -71,11 +50,10 @@
       <h2>Résultats</h2>
 
       <section id="fatal-block" hidden>
-        <h3 class="fatal-h">⚠ Erreurs fatales — importation annulée</h3>
+        <h3 class="fatal-h">⚠ Erreurs fatales — génération annulée</h3>
         <p class="hint">
           Un ou plusieurs billets du fichier Excel n'ont pas d'équivalent
-          dans le modèle <code>.mdb</code>.  Le chargeur s'arrête sans
-          rien écrire — corrigez le fichier Excel ou ajoutez les épreuves
+          dans le modèle.  Corrigez le fichier Excel ou ajoutez les épreuves
           manquantes dans SPLASH, puis relancez.
         </p>
         <ul id="fatal-list"></ul>
@@ -99,10 +77,8 @@
           </a>
         </p>
         <p class="hint">
-          Le fichier contient la base <code>.mdb</code> mise à jour
-          (ou le fichier <code>.lxf</code> Lenex) et un rapport texte
-          des problèmes détectés.
-          Le téléchargement nettoie le fichier côté serveur.
+          Le fichier contient le <code>.lxf</code> Lenex, les scripts VBS
+          et un rapport texte des problèmes détectés.
         </p>
       </section>
 
@@ -114,43 +90,14 @@
 
     <hr>
 
-    <section id="copy-masters-section">
-      <h2>Transfert des temps Masters (post-compétition)</h2>
-      <p class="hint">
-        Après les épreuves préliminaires, cet outil copie les temps
-        (<code>SWIMTIME</code>) des athlètes Masters inscrits dans les
-        prélims vers leur épreuve finale directe Masters, puis efface
-        le temps de la prélim pour qu'ils n'apparaissent pas dans les
-        résultats préliminaires.
-      </p>
-      <form id="copy-form">
-        <label>
-          Base <code>.mdb</code> avec les temps de prélim :
-          <input type="file" name="mdb" accept=".mdb" required>
-        </label>
-        <label style="margin-left:1rem">
-          <input type="checkbox" name="dry_run" value="true">
-          Simulation (aucune écriture)
-        </label>
-        <button type="submit" id="copy-go">Transférer</button>
-        <span id="copy-status" class="status"></span>
-      </form>
-      <section id="copy-results" hidden>
-        <pre id="copy-output"></pre>
-        <p id="copy-dl" hidden>
-          <a id="copy-dl-link" href="#">⬇ Télécharger le .mdb modifié</a>
-        </p>
-      </section>
-    </section>
-
     <!-- PDF Audit -->
     <section class="card">
       <h2>Audit PDF vs xlsx</h2>
-      <p>Comparer un heat-sheet PDF (généré par SPLASH) avec le xlsx source.</p>
+      <p>Comparer un PDF de résultats (généré par SPLASH) avec le xlsx source.</p>
       <form id="audit-form">
         <fieldset>
           <legend>Fichiers</legend>
-          <label>PDF (heat sheet) : <input type="file" name="pdf" accept=".pdf" required></label>
+          <label>PDF (résultats) : <input type="file" name="pdf" accept=".pdf" required></label>
           <label>xlsx (source) : <input type="file" name="xlsx" accept=".xlsx" required></label>
         </fieldset>
         <button type="submit">Auditer</button>

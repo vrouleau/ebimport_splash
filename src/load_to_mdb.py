@@ -46,7 +46,10 @@ from pathlib import Path
 from typing import Any
 
 import openpyxl
-import jaydebeapi  # JDBC bridge over UCanAccess
+try:
+    import jaydebeapi  # JDBC bridge over UCanAccess (optional — MDB path only)
+except ImportError:
+    jaydebeapi = None
 
 # --------------------------------------------------------------------------- #
 # Configuration
