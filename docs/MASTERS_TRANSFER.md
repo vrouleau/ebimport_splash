@@ -91,6 +91,14 @@ Note: For the Lenex path, `masters_transfer.bat` is run **twice**:
    - All entry times preserved correctly
 ```
 
+## Prerequisites (Windows)
+
+The VBS scripts require the **Microsoft Access Database Engine** (ACE OLEDB provider). If you get "Provider cannot be found" errors, install:
+
+- [Access Database Engine 2016 Redistributable](https://www.microsoft.com/en-us/download/details.aspx?id=54920)
+- Match bitness with your Office install (64-bit if no Office or 64-bit Office)
+- If it conflicts with existing Office: `AccessDatabaseEngine_X64.exe /quiet`
+
 ## VBS Scripts Included in Output ZIP
 
 | Script | Purpose |
