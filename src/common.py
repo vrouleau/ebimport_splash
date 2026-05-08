@@ -271,6 +271,7 @@ def _resolve_teammate(name_norm: str, name_to_key: dict, issues=None) -> tuple |
     if name_norm in name_to_key:
         return name_to_key[name_norm]
     tokens = name_norm.split()
+    orig_tokens = list(tokens)
     while len(tokens) > 2:
         tokens.pop()
         attempt = " ".join(tokens)
@@ -280,8 +281,8 @@ def _resolve_teammate(name_norm: str, name_to_key: dict, issues=None) -> tuple |
                     f"'{name_norm}' -> '{attempt}' (trimmed trailing tokens)")
             return name_to_key[attempt]
     # Prefix match: "phil skinder" -> "philip skinder"
-    if len(tokens) == 2:
-        first, last = tokens
+    if len(orig_tokens) == 2:
+        first, last = orig_tokens
         for key in name_to_key:
             parts = key.split()
             if len(parts) >= 2 and parts[-1] == last and parts[0].startswith(first):
@@ -290,16 +291,16 @@ def _resolve_teammate(name_norm: str, name_to_key: dict, issues=None) -> tuple |
                         f"'{name_norm}' -> '{key}' (prefix match)")
                 return name_to_key[key]
     # First+last fallback: "luis ismail gana-akkor" -> "luis gana-akkor"
-    if len(tokens) >= 3:
-        first_last = f"{tokens[0]} {tokens[-1]}"
+    if len(orig_tokens) >= 3:
+        first_last = f"{orig_tokens[0]} {orig_tokens[-1]}"
         if first_last in name_to_key:
             if issues:
                 issues.note("teammate_auto_fix",
                     f"'{name_norm}' -> '{first_last}' (dropped middle name)")
             return name_to_key[first_last]
     # Reversed name: "barter ying" -> "ying barter"
-    if len(tokens) == 2:
-        reversed_name = f"{tokens[1]} {tokens[0]}"
+    if len(orig_tokens) == 2:
+        reversed_name = f"{orig_tokens[1]} {orig_tokens[0]}"
         if reversed_name in name_to_key:
             if issues:
                 issues.note("teammate_auto_fix",
