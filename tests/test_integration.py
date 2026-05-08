@@ -288,11 +288,11 @@ class TestLenexPath:
         z = download_zip(resp["download_id"], save_as="lenex_result.zip")
         return resp, z
 
-    def test_zip_contains_lxf_and_mdb(self, lenex_result):
+    def test_zip_contains_lxf_and_scripts(self, lenex_result):
         _, z = lenex_result
         names = z.namelist()
         assert "meet.lxf" in names
-        assert "meet.mdb" in names
+        assert "masters_transfer.vbs" in names
 
     def test_lxf_is_valid_zip_with_lef(self, lenex_result):
         _, z = lenex_result

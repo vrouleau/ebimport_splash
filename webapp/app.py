@@ -241,9 +241,6 @@ def run_loader(mode: str,
                          compression=zipfile.ZIP_DEFLATED) as z:
         if result_file is not None and result_file.exists():
             z.write(result_file, arcname=result_file.name)
-        # Include the template mdb in lenex mode (as meet.mdb for consistency)
-        if mode == "lenex" and user_mdb and user_mdb.exists():
-            z.write(user_mdb, arcname="meet.mdb")
         # Include VBS scripts for MDB and Lenex modes
         if mode in ("mdb", "lenex"):
             for fname in ("masters_transfer.vbs", "masters_transfer.bat",
