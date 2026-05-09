@@ -1,5 +1,7 @@
 # ebimport_splash
 
+[![CI](https://github.com/vrouleau/ebimport_splash/actions/workflows/ci.yml/badge.svg)](https://github.com/vrouleau/ebimport_splash/actions/workflows/ci.yml)
+
 Convert an Eventbrite/registration Excel workbook into a Lenex `.lxf` file for import into **SPLASH Meet Manager 11**.
 
 ## How It Works
