@@ -26,7 +26,7 @@ Thumbs.db
 
 # but DO commit the synthetic test fixture
 !tests/test_attendees.xlsx
-!tests/fixtures/meet_template.lxf
+!tests/fixtures/meet_template_base.lxf
 
 # ---- UCanAccess runtime (downloaded locally; do not check in) ----
 ucanaccess/

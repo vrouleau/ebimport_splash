@@ -72,6 +72,16 @@ def test_xlsx():
     return TEST_XLSX
 
 
+@pytest.fixture(scope="session", autouse=True)
+def meet_lxf():
+    """Build the augmented meet_template.lxf from the committed base file."""
+    subprocess.run(
+        ["python", "tests/build_meet_fixture.py"],
+        cwd=REPO_ROOT, check=True,
+    )
+    return MEET_LXF
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -153,19 +163,19 @@ class TestLenexPath:
     def test_zip_contains_lxf_and_scripts(self, lenex_result):
         _, z = lenex_result
         names = z.namelist()
-        assert "meet.lxf" in names
+        assert "inscriptions.lxf" in names
         assert "masters_transfer.vbs" in names
 
     def test_lxf_is_valid_zip_with_lef(self, lenex_result):
         _, z = lenex_result
-        lxf_bytes = z.read("meet.lxf")
+        lxf_bytes = z.read("inscriptions.lxf")
         lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
         assert "meet.lef" in lxf.namelist()
 
     def test_ma_suffix_on_masters_athletes(self, lenex_result):
         """Masters athletes should have _MA suffix on LICENSE."""
         _, z = lenex_result
-        lxf_bytes = z.read("meet.lxf")
+        lxf_bytes = z.read("inscriptions.lxf")
         lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
         lef = lxf.read("meet.lef").decode()
 
@@ -178,7 +188,7 @@ class TestLenexPath:
     def test_masters_entries_in_prelim_events(self, lenex_result):
         """Masters athletes' entries should point to prelim events (not Masters finals)."""
         _, z = lenex_result
-        lxf_bytes = z.read("meet.lxf")
+        lxf_bytes = z.read("inscriptions.lxf")
         lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
         lef = lxf.read("meet.lef").decode()
 
@@ -204,7 +214,7 @@ class TestLenexPath:
     def test_open_25plus_no_ma_suffix(self, lenex_result):
         """Open athletes aged 25+ should NOT have _MA suffix."""
         _, z = lenex_result
-        lxf_bytes = z.read("meet.lxf")
+        lxf_bytes = z.read("inscriptions.lxf")
         lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
         lef = lxf.read("meet.lef").decode()
 
@@ -235,7 +245,7 @@ class TestLenexPath:
         teammate field. Her birthdate is on her Coach ticket row — the loader
         should harvest it so the .lxf carries her DOB."""
         _, z = lenex_result
-        lxf_bytes = z.read("meet.lxf")
+        lxf_bytes = z.read("inscriptions.lxf")
         lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
         lef = lxf.read("meet.lef").decode()
         m = re.search(
