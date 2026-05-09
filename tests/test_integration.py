@@ -240,6 +240,32 @@ class TestLenexPath:
                 age = 2026 - year
                 assert age >= 25, f"{name} has _MA but age={age}"
 
+    def test_relay_entrytime_matches_team_time(self, lenex_result):
+        """Relay ENTRY entrytime should be the relay row's team time,
+        not the sum of teammates' individual best times. Regression for
+        the bug where a 4×50 mixed medley swum in 3:31.08 was exported
+        as ~5:38 (sum of four individual leg estimates)."""
+        _, z = lenex_result
+        lxf_bytes = z.read("inscriptions.lxf")
+        lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
+        lef = lxf.read("meet.lef").decode()
+
+        relay_entries = re.findall(
+            r'<RELAY\b[^>]*>.*?<ENTRY [^>]*entrytime="([^"]+)"',
+            lef, re.DOTALL,
+        )
+        assert relay_entries, "no RELAY entries with entrytime found"
+        # Lenex format: HH:MM:SS.ss — parse to seconds.
+        def to_sec(s: str) -> float:
+            h, m, rest = s.split(":")
+            return int(h) * 3600 + int(m) * 60 + float(rest)
+        # All relay times in the test xlsx are well under 4 minutes.
+        # Pre-fix, the buggy sum produced 5+ minute entrytimes.
+        too_slow = [t for t in relay_entries if to_sec(t) > 4 * 60]
+        assert not too_slow, (
+            f"relay entrytimes look summed (>4:00): {too_slow[:5]}"
+        )
+
     def test_phantom_teammate_dob_from_coach_row(self, lenex_result):
         """Phantom Teammate is only referenced via Real Buddy's Corde duo's
         teammate field. Her birthdate is on her Coach ticket row — the loader

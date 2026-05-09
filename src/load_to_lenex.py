@@ -408,10 +408,9 @@ def main():
                         "agetotalmax": str(rel_totalmax),
                     }
                     rel_xml = ET.SubElement(relays_xml, "RELAY", rel_attrs)
-                    # Entry
-                    entry_time = None
-                    if all(bt is not None for _, bt in squad[:relay_size]):
-                        entry_time = sum(bt for _, bt in squad[:relay_size])
+                    # Entry — use the relay-row's team time (squad[0][1]),
+                    # not a sum of teammates' individual best times.
+                    entry_time = squad[0][1] if squad else None
                     ents_xml = ET.SubElement(rel_xml, "ENTRIES")
                     entry_attrs = {
                         "eventid": str(tevent.swim_event_id),

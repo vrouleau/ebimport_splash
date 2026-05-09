@@ -1876,9 +1876,7 @@ def main():
 
             next_team_no += 1
             rid = db.next_id()
-            entry_time = None
-            if all(bt is not None for _, bt in squad[:relay_size]):
-                entry_time = sum(bt for _, bt in squad[:relay_size])
+            entry_time = squad[0][1] if squad else None
             db.insert("RELAY", {
                 "RELAYID":      rid,
                 "CLUBID":       club_id,
