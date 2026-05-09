@@ -419,6 +419,19 @@ def build_rows(athletes, rng):
         "1:41.00", "Elite Rescue", "03/03/2000", "GFORT_B",
     ])
 
+    # 4i) Phantom teammate — listed in a Corde duo's Teammate column but has
+    #     no race entry of their own. Their DOB lives only on a Coach ticket
+    #     row, which the loader should harvest as a fallback.
+    rows.append([
+        "Real", "Buddy", "rb@x.com", "Open M Corde",
+        "0:14.50", "Aurora Test Club", "12/12/1998", "REAL01",
+        "Phantom Teammate PHAN01",
+    ])
+    rows.append([
+        "Phantom", "Teammate", "phantom@x.com", "Coach",
+        None, "Aurora Test Club", "07/07/1996", "PHAN01",
+    ])
+
     return rows
 
 

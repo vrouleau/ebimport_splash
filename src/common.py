@@ -31,8 +31,16 @@ class AggregatedData:
 
 
 def aggregate(inscriptions: list[Inscription],
-              issues: IssueCollector) -> AggregatedData:
-    """First + second pass: build clubs, athletes, entries, relay squads."""
+              issues: IssueCollector,
+              name_to_dob: dict | None = None) -> AggregatedData:
+    """First + second pass: build clubs, athletes, entries, relay squads.
+
+    ``name_to_dob`` (norm_key(first, last) -> datetime) lets teammate-only
+    swimmers — those listed in column I but with no entry row — still get a
+    birthdate from a related non-race ticket the same person bought.
+    """
+    if name_to_dob is None:
+        name_to_dob = {}
     clubs: dict[str, str] = {}
     athletes: dict[tuple, Inscription] = {}
     events_in_xlsx: dict[tuple, EventKey] = {}
@@ -92,13 +100,19 @@ def aggregate(inscriptions: list[Inscription],
                     parts = tname.split()
                     tfirst = " ".join(parts[:-1]) if len(parts) >= 2 else tname
                     tlast = parts[-1] if len(parts) >= 2 else ""
+                    # Try to recover a DOB from non-race rows the teammate
+                    # may have on their own (banquet/coach tickets).
+                    supp_dob = (name_to_dob.get(norm_key(tfirst, tlast))
+                                or name_to_dob.get(tname))
                     pkey = (tname, "")
                     if pkey not in athletes:
                         athletes[pkey] = Inscription(
                             first=tfirst.title(), last=tlast.title(),
-                            email=None, club=ins.club, birthdate=None,
+                            email=None, club=ins.club, birthdate=supp_dob,
                             license=None, best_time_ms=None, event=ins.event)
                         name_to_key[tname] = pkey
+                    elif supp_dob and not athletes[pkey].birthdate:
+                        athletes[pkey].birthdate = supp_dob
                     squad.append((pkey, None))
 
             squad_sig = frozenset(k for k, _ in squad)

@@ -23,17 +23,24 @@ import requests
 BASE_URL = os.environ.get("EBIMPORT_URL", "http://127.0.0.1:5000")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEST_XLSX = REPO_ROOT / "tests" / "test_attendees.xlsx"
+MEET_LXF = REPO_ROOT / "tests" / "fixtures" / "meet_template.lxf"
 OUTPUT_DIR = REPO_ROOT / "tests" / "output"
 TIMEOUT = 120
 
 
 @pytest.fixture(scope="session", autouse=True)
 def docker_up():
-    """Start the container, wait for health, tear down after all tests."""
-    subprocess.run(
-        ["docker", "compose", "up", "--build", "-d"],
-        cwd=REPO_ROOT, check=True, capture_output=True,
-    )
+    """Start the container, wait for health, tear down after all tests.
+
+    Set ``EBIMPORT_SKIP_STACK=1`` to assume the stack is already up — useful
+    when running pytest from inside a sidecar container that lacks docker.
+    """
+    skip_stack = os.environ.get("EBIMPORT_SKIP_STACK") == "1"
+    if not skip_stack:
+        subprocess.run(
+            ["docker", "compose", "up", "--build", "-d"],
+            cwd=REPO_ROOT, check=True, capture_output=True,
+        )
     # Wait for the service to respond
     deadline = time.time() + 60
     while time.time() < deadline:
@@ -47,10 +54,11 @@ def docker_up():
     else:
         pytest.fail("Container did not become healthy within 60s")
     yield
-    subprocess.run(
-        ["docker", "compose", "down"],
-        cwd=REPO_ROOT, capture_output=True,
-    )
+    if not skip_stack:
+        subprocess.run(
+            ["docker", "compose", "down"],
+            cwd=REPO_ROOT, capture_output=True,
+        )
 
 
 @pytest.fixture(scope="session")
@@ -68,15 +76,24 @@ def test_xlsx():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def upload(mode: str, xlsx_path: Path) -> dict:
-    """Upload xlsx and return JSON response."""
-    with open(xlsx_path, "rb") as f:
-        r = requests.post(
-            f"{BASE_URL}/api/run",
-            files={"xlsx": ("test.xlsx", f)},
-            data={"mode": mode},
-            timeout=TIMEOUT,
-        )
+def upload(mode: str, xlsx_path: Path, meet_path: Path | None = None) -> dict:
+    """Upload xlsx (and optional meet .lxf for lenex mode), return JSON."""
+    with open(xlsx_path, "rb") as f_x:
+        files = {"xlsx": ("test.xlsx", f_x)}
+        meet_handle = None
+        if meet_path is not None:
+            meet_handle = open(meet_path, "rb")
+            files["meet"] = ("meet.lxf", meet_handle)
+        try:
+            r = requests.post(
+                f"{BASE_URL}/api/run",
+                files=files,
+                data={"mode": mode},
+                timeout=TIMEOUT,
+            )
+        finally:
+            if meet_handle is not None:
+                meet_handle.close()
     assert r.status_code == 200, f"API returned {r.status_code}: {r.text}"
     return r.json()
 
@@ -126,7 +143,9 @@ class TestDryRun:
 class TestLenexPath:
     @pytest.fixture(scope="class")
     def lenex_result(self, test_xlsx):
-        resp = upload("lenex", test_xlsx)
+        if not MEET_LXF.exists():
+            pytest.skip(f"meet template not found at {MEET_LXF}")
+        resp = upload("lenex", test_xlsx, meet_path=MEET_LXF)
         assert resp["returncode"] == 0
         z = download_zip(resp["download_id"], save_as="lenex_result.zip")
         return resp, z
@@ -210,6 +229,22 @@ class TestLenexPath:
                 year = int(bd[:4])
                 age = 2026 - year
                 assert age >= 25, f"{name} has _MA but age={age}"
+
+    def test_phantom_teammate_dob_from_coach_row(self, lenex_result):
+        """Phantom Teammate is only referenced via Real Buddy's Corde duo's
+        teammate field. Her birthdate is on her Coach ticket row — the loader
+        should harvest it so the .lxf carries her DOB."""
+        _, z = lenex_result
+        lxf_bytes = z.read("meet.lxf")
+        lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
+        lef = lxf.read("meet.lef").decode()
+        m = re.search(
+            r'<ATHLETE [^>]*firstname="Phantom"[^>]*birthdate="([^"]+)"',
+            lef,
+        )
+        assert m, "Phantom Teammate ATHLETE missing or has no birthdate"
+        assert m.group(1) == "1996-07-07", \
+            f"unexpected DOB for Phantom Teammate: {m.group(1)}"
 
 
 # ---------------------------------------------------------------------------

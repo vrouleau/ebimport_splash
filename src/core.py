@@ -677,8 +677,9 @@ _JOTFORM_CAT_TO_AGE = {
 
 
 def _read_jotform(wb, ws, header: list[str],
-                  issues: IssueCollector | None) -> list[Inscription]:
-    """Parse a JotForm matrix-style export into Inscription records."""
+                  issues: IssueCollector | None
+                  ) -> tuple[list[Inscription], dict[str, "dt.datetime"]]:
+    """Parse a JotForm matrix-style export into Inscriptions + DOB lookup."""
 
     def _find_col(keywords):
         for i, h in enumerate(header):
@@ -711,6 +712,7 @@ def _read_jotform(wb, ws, header: list[str],
         row_columns.setdefault(row_label, {})[col_label] = i
 
     out: list[Inscription] = []
+    name_to_dob: dict[str, dt.datetime] = {}
     for row_idx, r in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         if not r:
             continue
@@ -735,6 +737,8 @@ def _read_jotform(wb, ws, header: list[str],
         club = str(r[i_club]).strip() if i_club is not None and r[i_club] else "Unattached"
         raw_dob = r[i_dob] if i_dob is not None else None
         bd = parse_birthdate(raw_dob)
+        if bd is not None:
+            name_to_dob.setdefault(norm_key(first, last), bd)
         if raw_dob and bd is None and issues:
             issues.warn("bad_birthdate",
                         f"{first} {last}: can't parse DOB {raw_dob!r}",
@@ -831,12 +835,19 @@ def _read_jotform(wb, ws, header: list[str],
                 teammates=teammates,
             ))
 
-    return out
+    return out, name_to_dob
 
 
 def read_attendees(xlsx_path: Path,
-                   issues: IssueCollector | None = None) -> list[Inscription]:
-    """Parse the Attendees sheet into a list of Inscription records.
+                   issues: IssueCollector | None = None
+                   ) -> tuple[list[Inscription], dict[str, "dt.datetime"]]:
+    """Parse the Attendees sheet into Inscriptions plus a name->DOB lookup.
+
+    Returns ``(inscriptions, name_to_dob)`` where ``name_to_dob`` is keyed by
+    ``norm_key(first, last)`` and built from non-race rows (Banquet, Coach,
+    etc.) so teammates listed only in column I — without an entry row of
+    their own — can still get a birthdate from a related ticket the same
+    person bought.
 
     If an IssueCollector is provided, data-quality problems encountered
     while parsing (missing names, unparseable ticket types, bad times,
@@ -850,6 +861,8 @@ def read_attendees(xlsx_path: Path,
     header = [str(c or "") for c in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
     if any(("[" in h and "]" in h) or (">>" in h) for h in header):
         return _read_jotform(wb, ws, header, issues)
+
+    name_to_dob: dict[str, dt.datetime] = {}
 
     # Eventbrite format — requires "Attendees" sheet
     if "Attendees" not in wb.sheetnames:
@@ -898,8 +911,12 @@ def read_attendees(xlsx_path: Path,
         if ev is None:
             # Distinguish intentional non-race tickets from unknown ones
             if any(ticket.startswith(p) for p in NON_RACE_PREFIXES):
-                # legitimate non-race (Banquet, Coach, etc.)
-                pass
+                # Legitimate non-race (Banquet, Coach, etc.) — record the
+                # athlete's DOB so a teammate-only swimmer with no entry row
+                # can still get a birthdate from this row.
+                bd_supp = parse_birthdate(r[i_dob])
+                if bd_supp is not None:
+                    name_to_dob.setdefault(norm_key(first, last), bd_supp)
             else:
                 if issues:
                     issues.warn("unknown_ticket",
@@ -926,13 +943,15 @@ def read_attendees(xlsx_path: Path,
                 issues.warn("bad_birthdate",
                             f"{first} {last}: can't parse DOB {raw_dob!r}",
                             row=row_idx)
-        elif bd is not None and issues:
-            age = age_at(bd)
-            if age is not None and (age < 0 or age > 99):
-                issues.warn("bad_birthdate",
-                            f"{first} {last}: implausible age {age} "
-                            f"(DOB {bd.strftime('%Y-%m-%d')})",
-                            row=row_idx)
+        elif bd is not None:
+            name_to_dob.setdefault(norm_key(first, last), bd)
+            if issues:
+                age = age_at(bd)
+                if age is not None and (age < 0 or age > 99):
+                    issues.warn("bad_birthdate",
+                                f"{first} {last}: implausible age {age} "
+                                f"(DOB {bd.strftime('%Y-%m-%d')})",
+                                row=row_idx)
 
         # Name-length warnings (will be truncated for SPLASH columns)
         if len(str(first)) > 30 and issues:
@@ -972,7 +991,7 @@ def read_attendees(xlsx_path: Path,
             teammates=(str(r[i_team]).strip()
                        if i_team is not None and r[i_team] else None),
         ))
-    return out
+    return out, name_to_dob
 
 
 # --------------------------------------------------------------------------- #
@@ -1378,12 +1397,12 @@ def main():
 
     print(f"Reading {args.xlsx}...")
     issues = IssueCollector()
-    inscriptions = read_attendees(args.xlsx, issues)
+    inscriptions, name_to_dob = read_attendees(args.xlsx, issues)
     print(f"  {len(inscriptions)} race inscriptions extracted")
 
     # Aggregate
     from common import aggregate, run_sanity_checks, run_validation, run_cross_row_checks
-    data = aggregate(inscriptions, issues)
+    data = aggregate(inscriptions, issues, name_to_dob=name_to_dob)
     clubs = data.clubs
     athletes = data.athletes
     name_to_key = data.name_to_key

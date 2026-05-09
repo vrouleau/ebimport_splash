@@ -168,7 +168,7 @@ def audit(pdf_path: Path, xlsx_path: Path) -> dict:
     entries = parse_pdf(pdf_path)
 
     issues_coll = IssueCollector()
-    inscriptions = read_attendees(xlsx_path, issues_coll)
+    inscriptions, _ = read_attendees(xlsx_path, issues_coll)
 
     # Build xlsx lookup
     xlsx_by_name: dict[tuple, list] = defaultdict(list)

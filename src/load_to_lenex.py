@@ -118,7 +118,7 @@ def main():
 
     # Parse xlsx
     issues = IssueCollector()
-    inscriptions = read_attendees(args.xlsx, issues)
+    inscriptions, name_to_dob = read_attendees(args.xlsx, issues)
     print(f"  {len(inscriptions)} race inscriptions")
 
     # Open template — prefer meet .lxf
@@ -150,7 +150,7 @@ def main():
     AGE_DATE = core.AGE_DATE or dt.date(2026, 12, 31)
 
     # Aggregate
-    data = aggregate(inscriptions, issues)
+    data = aggregate(inscriptions, issues, name_to_dob=name_to_dob)
     clubs = data.clubs
     athletes = data.athletes
     name_to_key = data.name_to_key
