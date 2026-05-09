@@ -62,6 +62,16 @@ class MeetLxfTemplate:
 
     def find_event(self, uid: int, gender: int, masters: bool = False) -> TemplateEvent | None:
         evs = self.events_by_uid_gender.get((uid, gender), [])
+        # Prefer prelim (round=2) matching masters flag
+        for e in evs:
+            if e.masters == masters and e.round == 2:
+                return e
+        # For non-masters: fall back to any prelim (shared prelim marked as MASTERS)
+        if not masters:
+            for e in evs:
+                if e.round == 2:
+                    return e
+        # Exact masters match (timed final for masters-only events)
         for e in evs:
             if e.masters == masters:
                 return e
