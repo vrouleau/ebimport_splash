@@ -306,6 +306,8 @@ def main():
                                  for (ak, ek), _ in best_by.items() if ak == akey)
                 attrs["license"] = ins.license + ("_MA" if is_masters else "")
             ath_xml = ET.SubElement(aths_xml, "ATHLETE", attrs)
+            if is_masters:
+                ET.SubElement(ath_xml, "HANDICAP", {"exception": "X"})
 
             # Individual entries for this athlete
             my_entries = [(ekey, ms) for (ak, ekey), ms in best_by.items()
