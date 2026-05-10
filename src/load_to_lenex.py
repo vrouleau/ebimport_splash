@@ -158,6 +158,8 @@ def main():
             sys.exit(2)
 
     AGE_DATE = core.AGE_DATE or dt.date(2026, 12, 31)
+    core.AGE_DATE = AGE_DATE
+    core.AGE_DATE = AGE_DATE
 
     # Aggregate
     data = aggregate(inscriptions, issues, name_to_dob=name_to_dob)
