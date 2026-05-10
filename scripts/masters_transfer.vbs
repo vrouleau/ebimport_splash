@@ -60,7 +60,7 @@ WScript.Echo "Age date: " & ageDate
 ' Detect Masters athletes via HANDICAP exception='X'
 ' Mark their SWIMRESULT rows with BONUSENTRY='T' for transfer
 maCount = 0
-Set rsMA = conn.Execute("SELECT ATHLETEID FROM ATHLETE WHERE EXCEPTION='X'")
+Set rsMA = conn.Execute("SELECT ATHLETEID FROM ATHLETE WHERE HANDICAPEX='X'")
 Do While Not rsMA.EOF
     maAid = CLng(rsMA("ATHLETEID"))
     conn.Execute "UPDATE SWIMRESULT SET BONUSENTRY='T' WHERE ATHLETEID=" & maAid
