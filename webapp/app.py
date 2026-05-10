@@ -297,8 +297,8 @@ def _render_issues_text(parsed: dict, xlsx_name: str) -> str:
 
 def _download_name(mode: str, xlsx_name: str) -> str:
     base = Path(xlsx_name).stem or "meet"
-    suffix = {"dry-run": "dry-run", "mdb": "mdb", "lenex": "lenex"}[mode]
-    return f"{base}-{suffix}.zip"
+    suffix = {"dry-run": "dryrun", "mdb": "mdb", "lenex": "inscription"}[mode]
+    return f"splash-{suffix}.zip"
 
 
 # --------------------------------------------------------------------------- #
