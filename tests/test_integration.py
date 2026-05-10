@@ -172,18 +172,18 @@ class TestLenexPath:
         lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
         assert "meet.lef" in lxf.namelist()
 
-    def test_ma_suffix_on_masters_athletes(self, lenex_result):
-        """Masters athletes should have _MA suffix on LICENSE."""
+    def test_handicap_on_masters_athletes(self, lenex_result):
+        """Masters athletes should have HANDICAP exception='X'."""
         _, z = lenex_result
         lxf_bytes = z.read("inscriptions.lxf")
         lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
         lef = lxf.read("meet.lef").decode()
 
-        licenses = re.findall(r'license="([^"]+)"', lef)
-        ma_licenses = [l for l in licenses if l.endswith("_MA")]
-        non_ma_licenses = [l for l in licenses if not l.endswith("_MA")]
-        assert len(ma_licenses) > 0, "No _MA suffixed athletes found"
-        assert len(non_ma_licenses) > 0, "All athletes have _MA (wrong)"
+        handicap_athletes = re.findall(r'<HANDICAP exception="X"', lef)
+        assert len(handicap_athletes) > 0, "No HANDICAP exception='X' athletes found"
+        # Not all athletes should have it
+        all_athletes = re.findall(r'<ATHLETE ', lef)
+        assert len(handicap_athletes) < len(all_athletes)
 
     def test_masters_entries_in_prelim_events(self, lenex_result):
         """Masters athletes' entries should point to prelim events (not Masters finals)."""
@@ -192,18 +192,18 @@ class TestLenexPath:
         lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
         lef = lxf.read("meet.lef").decode()
 
-        # Parse athlete blocks with _MA suffix
+        # Parse athlete blocks with HANDICAP exception
         athlete_blocks = re.findall(
-            r'<ATHLETE [^>]*license="([^"]+)"[^>]*>(.*?)</ATHLETE>',
+            r'<ATHLETE [^>]*>(.*?)</ATHLETE>',
             lef, re.DOTALL,
         )
         ma_event_ids = []
-        for lic, block in athlete_blocks:
-            if lic.endswith("_MA"):
+        for block in athlete_blocks:
+            if 'exception="X"' in block:
                 eids = re.findall(r'eventid="(\d+)"', block)
                 ma_event_ids.extend(int(e) for e in eids)
 
-        assert len(ma_event_ids) > 0, "No entries found for _MA athletes"
+        assert len(ma_event_ids) > 0, "No entries found for Masters athletes"
         # Prelim events have IDs < 3000 in the template; Masters finals are 4xxx
         prelim_count = sum(1 for e in ma_event_ids if e < 3000)
         final_count = sum(1 for e in ma_event_ids if e >= 4600)
@@ -211,34 +211,30 @@ class TestLenexPath:
         # Masters-only events (UID 541) go to final — that's OK but should be minority
         assert prelim_count > final_count
 
-    def test_open_25plus_no_ma_suffix(self, lenex_result):
-        """Open athletes aged 25+ should NOT have _MA suffix."""
+    def test_open_25plus_no_handicap(self, lenex_result):
+        """Open athletes aged 25+ should NOT have HANDICAP exception='X'."""
         _, z = lenex_result
         lxf_bytes = z.read("inscriptions.lxf")
         lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
         lef = lxf.read("meet.lef").decode()
 
-        # Find athletes with birthdate making them 25+ but no _MA
-        athletes = re.findall(
-            r'<ATHLETE [^>]*lastname="([^"]+)"[^>]*license="([^"]+)"[^>]*birthdate="([^"]+)"',
-            lef,
+        # Find athlete blocks without HANDICAP but aged 25+
+        athlete_blocks = re.findall(
+            r'<ATHLETE [^>]*birthdate="([^"]+)"[^>]*>(.*?)</ATHLETE>',
+            lef, re.DOTALL,
         )
-        for name, lic, bd in athletes:
+        for bd, block in athlete_blocks:
             try:
                 year = int(bd[:4])
                 age = 2026 - year
             except ValueError:
                 continue
-            if age >= 25 and not lic.endswith("_MA"):
-                # This is an Open 25+ athlete — correct, no _MA
-                return  # found at least one, test passes
-        # If we get here, no Open 25+ athletes exist (unlikely with test data)
-        # Just check no one under 25 has _MA
-        for name, lic, bd in athletes:
-            if lic.endswith("_MA"):
-                year = int(bd[:4])
-                age = 2026 - year
-                assert age >= 25, f"{name} has _MA but age={age}"
+            if age >= 25 and 'exception="X"' not in block:
+                return  # found an Open 25+ without handicap — correct
+        # Fallback: ensure not everyone has handicap
+        all_ath = re.findall(r'<ATHLETE ', lef)
+        handicap = re.findall(r'<HANDICAP exception="X"', lef)
+        assert len(handicap) < len(all_ath)
 
     def test_relay_entrytime_matches_team_time(self, lenex_result):
         """Relay ENTRY entrytime should be the relay row's team time,
