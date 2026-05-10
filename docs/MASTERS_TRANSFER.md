@@ -2,130 +2,80 @@
 
 ## Problem
 
-SPLASH Meet Manager doesn't natively support a workflow where Masters athletes swim in the same prelim heats as Open/15-18 athletes and are later moved to a separate Masters final for scoring. Additionally, if Masters 5-year age brackets exist on the prelim event, SPLASH reassigns Open athletes (aged 25+) into those brackets, breaking points/medals.
+SPLASH Meet Manager doesn't natively support a workflow where Masters athletes swim in the same prelim heats as Open/15-18 athletes and are later moved to a separate Masters final for scoring.
 
 ## Solution
 
-A two-phase approach using `BONUSENTRY` as a marker:
+A two-phase approach:
 
-1. **Phase 1 (Import)**: All athletes (including Masters) are registered in the prelim event under the `[19-99]` bracket. Masters athletes are marked with `BONUSENTRY='T'` so they can be identified later.
+1. **Phase 1 (Import)**: All athletes (including Masters) are registered in the prelim event under the `[19-99]` bracket. Masters athletes are marked with `HANDICAP exception='X'` in the Lenex, which SPLASH imports as `EXCEPTIONNAGEUR='X'` on the athlete record.
 
-2. **Phase 2 (Transfer)**: After prelim heats are run, a VBS script moves Masters athletes from the prelim to the Masters final event, creating heats and deleting the prelim rows.
+2. **Phase 2 (Transfer)**: After prelim heats are run, a VBS script identifies Masters athletes by their exception code, moves them from the prelim to the Masters final event, creating heats and deleting the prelim rows.
 
-## How Masters Are Marked
+## How Masters Are Identified
 
-### MDB Loader Path (`load_to_mdb.py`)
-- Sets `SWIMRESULT.BONUSENTRY = 'T'` directly for any athlete whose ticket is `MA` (Masters).
-- No additional steps needed.
-
-### Lenex Path (`load_to_lenex.py`)
-- Suffixes the athlete's `LICENSE` field with `_MA` in the Lenex XML (e.g., `YETP42` → `YETP42_MA`).
-- When SPLASH imports the Lenex, it preserves the LICENSE value.
-- The VBS script detects the `_MA` suffix, sets `BONUSENTRY='T'`, and strips the suffix back to the clean NRAN.
+- The Lenex generator adds `<HANDICAP exception="X"/>` to any athlete with Masters entries.
+- SPLASH imports this as `EXCEPTIONNAGEUR='X'` on the ATHLETE record.
+- The VBS script queries `WHERE EXCEPTIONNAGEUR='X'`, marks their SWIMRESULT rows with `BONUSENTRY='T'`, then transfers them.
+- The 'X' code also appears on heat sheet PDFs, making Masters athletes visually identifiable.
 
 ### Masters-Only Events (e.g., UID 541 — 100m Obstacle Masters)
 - These events have no prelim — only a timed final.
 - Athletes are routed directly to the Masters final with their correct 5-year age bracket.
-- They still get `BONUSENTRY='T'` but the VBS won't move them (they're already in the final).
-
-## Template Requirement
-
-The template MDB must NOT have Masters 5-year brackets (AGEMIN 25-99) on prelim events. Only `[15-18]` and `[19-99]` should exist on prelims. This prevents SPLASH from reassigning athletes to age-specific brackets during heat generation.
-
-Use `cleanup_prelim_brackets.vbs` (one-time) to remove them:
-```
-cscript cleanup_prelim_brackets.vbs "C:\path\to\template.mdb"
-```
+- The VBS won't move them (they're already in the final).
 
 ## Workflow
 
-### MDB Path
 ```
-1. Upload xlsx → webapp generates meet.mdb
-2. Open meet.mdb in SPLASH
-3. Generate heats (all athletes in prelim together)
+1. Upload xlsx + meet .lxf → webapp generates entries .lxf
+2. Import entries .lxf into SPLASH
+3. Generate heats in SPLASH (Masters swim with everyone in prelim)
 4. Run prelim races (or simulate_results.bat for testing)
 5. Run masters_transfer.bat
-   → Transfers BONUSENTRY='T' athletes to Masters finals
+   → Detects exception='X' athletes
+   → Marks BONUSENTRY='T' on their SWIMRESULT rows
+   → Transfers those with SWIMTIME > 0 to Masters finals
    → Creates heats in final events
    → Deletes prelim rows
 6. Continue with Masters finals in SPLASH
 ```
 
-### Lenex Path
-```
-1. Upload xlsx → webapp generates meet.lxf + meet.mdb
-2. Import meet.lxf into SPLASH (creates entries)
-3. Run masters_transfer.bat
-   → Detects _MA suffix in LICENSE
-   → Sets BONUSENTRY='T' and strips _MA
-4. Generate heats in SPLASH (Masters stay in prelim with everyone)
-5. Run prelim races (or simulate_results.bat for testing)
-6. Run masters_transfer.bat AGAIN
-   → Now transfers athletes with BONUSENTRY='T' and SWIMTIME > 0
-   → Creates heats in final events
-   → Deletes prelim rows
-7. Continue with Masters finals in SPLASH
-```
-
-Note: For the Lenex path, `masters_transfer.bat` is run **twice**:
-- First time: marks Masters (converts `_MA` → `BONUSENTRY`)
-- Second time: does the actual transfer (after prelims are run)
-
 ### Testing with Simulated Results
 ```
-1. Generate MDB or import Lenex
-2. Generate heats in SPLASH
-3. Run simulate_results.bat (writes random SWIMTIME ±5% of entry time)
+1. Import Lenex into SPLASH
+2. Generate heats
+3. Run simulate_results.bat (random SWIMTIME ±5% of entry time)
 4. Run masters_transfer.bat (transfers Masters to finals)
 ```
 
-### Auditing Results
-```
-1. In SPLASH: Reports → Results → export PDF
-2. Audit the PDF against the original xlsx:
-   curl -X POST http://localhost:5000/api/audit -F pdf=@results.pdf -F xlsx=@input.xlsx
-3. Verify:
-   - Masters athletes appear in Masters final results with correct 5-year brackets
-   - Open athletes aged 25+ remain in Open results, not transferred
-   - All entry times preserved correctly
-```
+## Template Requirement
+
+The template MDB must NOT have Masters 5-year brackets (AGEMIN 25-99) on prelim events. Only `[15-18]` and `[19-99]` should exist on prelims.
 
 ## Prerequisites (Windows)
 
-The VBS scripts require the **Microsoft Access Database Engine** (ACE OLEDB provider). If you get "Provider cannot be found" errors, install:
-
+The VBS scripts require the **Microsoft Access Database Engine** (ACE OLEDB provider):
 - [Access Database Engine 2016 Redistributable](https://www.microsoft.com/en-us/download/details.aspx?id=54920)
-- Match bitness with your Office install (64-bit if no Office or 64-bit Office)
-- If it conflicts with existing Office: `AccessDatabaseEngine_X64.exe /quiet`
 
-## VBS Scripts Included in Output ZIP
+## VBS Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `masters_transfer.vbs` | Mark Masters + transfer to finals |
+| `masters_transfer.vbs` | Identify Masters (exception=X) + transfer to finals |
 | `masters_transfer.bat` | Runs masters_transfer.vbs on meet.mdb |
 | `simulate_results.vbs` | Generate random swim times for testing |
 | `simulate_results.bat` | Runs simulate_results.vbs on meet.mdb |
 
 ## Technical Details
 
-### BONUSENTRY Field
-- `SWIMRESULT.BONUSENTRY` is a text field ('T'/'F') in the SPLASH MDB schema.
-- SPLASH does not use it for lifesaving meets — safe to repurpose as a Masters marker.
-- The VBS transfer script queries: `WHERE BONUSENTRY='T' AND SWIMTIME > 0`
+### Exception Code
+- `ATHLETE.EXCEPTIONNAGEUR = 'X'` in the SPLASH MDB schema.
+- Set via `<HANDICAP exception="X"/>` in Lenex import.
+- Visible on heat sheet PDFs as 'X' next to the athlete name.
 
-### _MA Suffix
-- Applied to `ATHLETE.LICENSE` in the Lenex XML.
-- SPLASH preserves LICENSE on import without modification.
-- The VBS uses `WHERE LICENSE LIKE '%[_]MA'` to find them.
-- After marking, the suffix is stripped: `UPDATE ATHLETE SET LICENSE='...' WHERE ...`
+### BONUSENTRY Field
+- `SWIMRESULT.BONUSENTRY` ('T'/'F') is used internally by the VBS as a transfer marker.
+- The VBS sets it from the exception code, then queries `WHERE BONUSENTRY='T' AND SWIMTIME > 0` for transfer.
 
 ### Age-Based Fallback
-- If neither `BONUSENTRY='T'` nor `_MA` suffix is found, the VBS falls back to transferring all athletes aged 25+ (original behaviour).
-- This handles legacy MDBs created before the BONUSENTRY system.
-
-### UCanAccess Limitation
-- UCanAccess (Java) cannot persist DELETE operations to MDB files created by SPLASH's Lenex import.
-- The VBS scripts use Microsoft ACE OLEDB (native Windows driver) which works on all MDB files.
-- This is why the transfer is done via VBS on Windows, not in the Python container.
+- If no exception-marked athletes are found, the VBS falls back to transferring all athletes aged 25+.

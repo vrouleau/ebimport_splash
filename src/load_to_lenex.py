@@ -301,10 +301,10 @@ def main():
             if ins.birthdate:
                 attrs["birthdate"] = ins.birthdate.strftime("%Y-%m-%d")
             if ins.license:
-                # Suffix _MA if athlete has any Masters entries
+                # Check if athlete has any Masters entries
                 is_masters = any(events_in_xlsx[ek].age_code == "MASTERS"
                                  for (ak, ek), _ in best_by.items() if ak == akey)
-                attrs["license"] = ins.license + ("_MA" if is_masters else "")
+                attrs["license"] = ins.license or ""
             ath_xml = ET.SubElement(aths_xml, "ATHLETE", attrs)
             if is_masters:
                 ET.SubElement(ath_xml, "HANDICAP", {"exception": "X"})
@@ -317,7 +317,7 @@ def main():
                 for ekey, ms in my_entries:
                     ev = events_in_xlsx[ekey]
                     # All athletes go to prelim — Masters are marked via
-                    # _MA suffix and transferred after prelims by VBS
+                    # HANDICAP exception='X' and transferred after prelims by VBS
                     tevent = template.find_event(
                         ev.uniqueid, ev.gender, masters=False)
                     if tevent is None:
@@ -463,8 +463,7 @@ def main():
         out_path.write_text(xml_str, encoding="utf-8")
         print(f"  Written: {out_path}")
 
-    # Write masters NRAN list (for VBS mark_masters step)
-    # No longer needed — _MA suffix in LICENSE handles this
+    # Masters identification: HANDICAP exception='X' on athlete element
     pass
 
     issues.report("Issues found while generating Lenex", full=True)

@@ -2,8 +2,7 @@
 ' Copies Masters athletes from prelim events to Masters finals,
 ' creates heats, and deletes the prelim rows.
 '
-' Identifies Masters by BONUSENTRY='T' (MDB loader path).
-' If none found, falls back to age >= 25 (Lenex import path).
+' Identifies Masters by HANDICAP exception='X' (set during Lenex import).
 '
 ' Usage: cscript masters_transfer.vbs "C:\path\to\meet.mdb"
 ' Run AFTER prelim heats have been swum (SWIMTIME populated).
@@ -26,7 +25,7 @@ Dim srIds(500), athIds(500), swimtimes(500), entrytimes(500)
 Dim reactions(500), statuses(500), birthdates(500), srCount
 Dim heatNum, laneNum, currentHeatId, eventCount, si
 Dim athleteAge, bdVal, targetAGID, ki, stVal
-Dim useBonus, rsMA, maCount, maAid, maLic, maClean
+Dim useBonus, rsMA, maCount, maAid
 Dim shouldInclude, tmpAge
 
 mdbPath = WScript.Arguments(0)
@@ -58,25 +57,22 @@ Else
 End If
 WScript.Echo "Age date: " & ageDate
 
-' Detect mode and mark Masters
-' First: check for _MA suffix in LICENSE (Lenex path)
+' Detect Masters athletes via HANDICAP exception='X'
+' Mark their SWIMRESULT rows with BONUSENTRY='T' for transfer
 maCount = 0
-Set rsMA = conn.Execute("SELECT ATHLETEID, LICENSE FROM ATHLETE WHERE LICENSE LIKE '%[_]MA'")
+Set rsMA = conn.Execute("SELECT ATHLETEID FROM ATHLETE WHERE EXCEPTIONNAGEUR='X'")
 Do While Not rsMA.EOF
     maAid = CLng(rsMA("ATHLETEID"))
-    maLic = rsMA("LICENSE") & ""
-    maClean = Left(maLic, Len(maLic) - 3)
     conn.Execute "UPDATE SWIMRESULT SET BONUSENTRY='T' WHERE ATHLETEID=" & maAid
-    conn.Execute "UPDATE ATHLETE SET LICENSE='" & maClean & "' WHERE ATHLETEID=" & maAid
     maCount = maCount + 1
     rsMA.MoveNext
 Loop
 rsMA.Close
 If maCount > 0 Then
-    WScript.Echo "Marked " & maCount & " athletes from _MA suffix"
+    WScript.Echo "Marked " & maCount & " Masters athletes (exception=X)"
 End If
 
-' Now check if we have BONUSENTRY='T' (either from MDB loader or just marked above)
+' Check BONUSENTRY count
 Set rs = conn.Execute("SELECT COUNT(*) AS C FROM SWIMRESULT WHERE BONUSENTRY='T'")
 If CInt(rs("C")) > 0 Then
     useBonus = True
