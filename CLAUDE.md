@@ -1,14 +1,12 @@
 # ebimport_splash
 
-Python tool + Flask web app that converts a JotForm registration spreadsheet (xlsx) into either a SPLASH Meet Manager 11 .mdb or a Lenex 3.0 .lxf file, ready to load into SPLASH for a lifesaving meet.
+Python tool + Flask web app that converts a JotForm registration spreadsheet (xlsx) into a Lenex 3.0 .lxf file, ready to load into SPLASH for a lifesaving meet.
 
 ## What it does
 
 1. Reads a JotForm "Attendees" xlsx export with registration rows (athlete, club, events, age category, best times).
 2. Validates entries against the SPLASH meet template (event structure, age groups, relay constraints).
-3. Outputs either:
-   - A populated `.mdb` (Access DB) via UCanAccess/JDBC — for direct SPLASH import (`load_to_mdb.py` / `core.py`)
-   - A Lenex `.lxf` file — for import through Meet Manager's standard Lenex import (`load_to_lenex.py`)
+3. Outputs a Lenex `.lxf` file for import through Meet Manager's standard Lenex import (`load_to_lenex.py`).
 
 The web UI (`webapp/app.py`) wraps the Lenex path as a stateless Flask app.
 
@@ -21,8 +19,7 @@ ebimport_splash/
 │   ├── load_to_lenex.py    # CLI: xlsx + meet .lxf → output .lxf
 │   ├── meet_parser.py      # Parse SPLASH meet .lxf → ParsedMeet (shared with meetmanager-app)
 │   ├── common.py           # Shared validation, sanity checks
-│   ├── audit_pdf.py        # Generate audit PDF from issues
-│   └── load_to_mdb.py      # (older) Direct MDB write via UCanAccess (kept for reference)
+│   └── audit_pdf.py        # Generate audit PDF from issues
 ├── webapp/
 │   └── app.py              # Flask web app wrapping load_to_lenex
 ├── scripts/
@@ -46,14 +43,14 @@ ebimport_splash/
 ### `src/core.py`
 Central module. Contains:
 - `read_attendees(xlsx)` — parse the JotForm xlsx into `Inscription` dataclasses
-- `IssueCollector` — accumulate FATAL / WARNING / INFO issues; any FATAL aborts the write
-- `TemplateIndex` — wraps the SPLASH MDB template, indexes events/age groups/styles
-- `MeetLxfTemplate` (in `load_to_lenex.py`) — same interface wrapping a `ParsedMeet`
+- `IssueCollector` — accumulate WARNING / NOTE issues; surfaced in the output report
+- `TemplateStyle`, `TemplateAgeGroup`, `TemplateEvent` — dataclasses used by `MeetLxfTemplate`
+- `MeetLxfTemplate` (in `load_to_lenex.py`) — wraps a `ParsedMeet` for event/age-group lookup
 - `pick_agegroup_for_individual(age, event_codes, template)` — route individual entry to correct age group
 - `pick_agegroup_for_relay(ages, template)` — route relay by sum-of-ages for Masters relays
 - Age/gender constants: `GENDER_MALE=1, GENDER_FEMALE=2, GENDER_ALL=0, GENDER_MIXED=3`
 - Round constants: `ROUND_TIMED_FINAL=1, ROUND_PRELIM=2, ROUND_FINAL=9`
-- `AGE_DATE` — global, set from `BSGLOBAL.MEETVALUES.AGEDATE` in the template MDB
+- `AGE_DATE` — global, set by `load_to_lenex.py` (defaults to 2026-12-31 if not overridden)
 
 ### `src/meet_parser.py`
 Parses a SPLASH-exported meet `.lxf` (zip containing `.lef` XML) into:
@@ -93,7 +90,7 @@ Stateless Flask app:
 - Individual Masters: routed to 5-year age brackets in SPLASH
 - Masters relay: routed by sum of team members' ages
 - Identified in Lenex output with `HANDICAP exception=X` attribute
-- `AGE_DATE` must be set (read from template MDB's `BSGLOBAL.MEETVALUES.AGEDATE`)
+- `AGE_DATE` defaults to 2026-12-31; override by setting `core.AGE_DATE` before calling
 
 ## Exported zip naming
 
@@ -121,6 +118,5 @@ pytest test_integration.py
 
 ## Environment
 
-- UCanAccess dir (for MDB path): `UCANACCESS_DIR` env var, default `/tmp/ucanaccess/UCanAccess-5.0.1.bin`
 - Nation: hardcoded `CAN` in `core.py`
 - Build timestamp injected via Docker ARG `BUILD_TIMESTAMP`

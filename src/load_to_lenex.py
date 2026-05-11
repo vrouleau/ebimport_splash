@@ -18,13 +18,13 @@ from xml.etree import ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).parent))
 from core import (
-    read_attendees, IssueCollector, TemplateIndex, MDB,
+    read_attendees, IssueCollector,
     pick_agegroup_for_individual, pick_agegroup_for_relay,
     norm_key, age_at, EventKey, Inscription,
     GENDER_MALE, GENDER_FEMALE, GENDER_MIXED,
     TemplateEvent, TemplateAgeGroup, TemplateStyle,
 )
-from common import aggregate, run_sanity_checks, run_validation, run_cross_row_checks
+from common import aggregate, run_validation, run_cross_row_checks
 from meet_parser import parse_meet_lxf, ParsedMeet
 from collections import defaultdict
 import re
@@ -115,10 +115,6 @@ def main():
     ap.add_argument("--xlsx", required=True, type=Path)
     ap.add_argument("--meet", type=Path,
                     help="Meet structure .lxf (exported from SPLASH)")
-    ap.add_argument("--template", type=Path,
-                    help="(deprecated) Template JSON")
-    ap.add_argument("--mdb", type=Path,
-                    help="(deprecated) Template .mdb")
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--zip", action="store_true")
     args = ap.parse_args()
@@ -131,32 +127,18 @@ def main():
     inscriptions, name_to_dob = read_attendees(args.xlsx, issues)
     print(f"  {len(inscriptions)} race inscriptions")
 
-    # Open template — prefer meet .lxf
-    db = None
+    # Open template
     template = None
     if args.meet and args.meet.exists():
         meet = parse_meet_lxf(args.meet)
         template = MeetLxfTemplate(meet)
-    elif args.template and args.template.exists():
-        sys.exit("--template is deprecated. Use --meet with a SPLASH meet export .lxf")
-    elif args.mdb and args.mdb.exists():
-        db = MDB(args.mdb, dry_run=True)
-        template = TemplateIndex(db)
     elif not args.meet:
         # No meet file — parse-only validation (no event matching)
         pass
     else:
         sys.exit("Provide --meet (SPLASH meet export .lxf)")
 
-    # Sanity checks (only for MDB-based template)
     import core
-    if db:
-        sanity_errors = run_sanity_checks(template)
-        if sanity_errors:
-            for e in sanity_errors:
-                print(f"  FATAL: {e}")
-            sys.exit(2)
-
     AGE_DATE = core.AGE_DATE or dt.date(2026, 12, 31)
     core.AGE_DATE = AGE_DATE
 
@@ -176,7 +158,6 @@ def main():
             print("\n  FATAL: template/xlsx mismatch")
             for f in fatal:
                 print(f"  - {f}")
-            if db: db.close()
             sys.exit(2)
 
     # Cross-row checks (requires template)

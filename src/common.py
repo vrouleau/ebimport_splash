@@ -1,20 +1,13 @@
-"""
-Shared aggregation and validation logic for ebimport_splash.
-
-Both load_to_mdb.py and load_to_lenex.py use this module to:
-  - Aggregate inscriptions into clubs, athletes, entries, relay squads
-  - Deduplicate athletes by name (prefer licensed key)
-  - Run cross-row data-quality checks
-  - Run template sanity checks (TICKET_UID, AGE_DATE)
-"""
+"""Shared aggregation and validation logic for ebimport_splash."""
 from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from typing import Any
 
 from core import (
-    Inscription, EventKey, IssueCollector, TemplateIndex,
+    Inscription, EventKey, IssueCollector,
     norm_key, age_at, TICKET_UID,
     GENDER_MALE, GENDER_FEMALE,
 )
@@ -131,9 +124,8 @@ def aggregate(inscriptions: list[Inscription],
     )
 
 
-def run_sanity_checks(template: TemplateIndex) -> list[str]:
+def run_sanity_checks(template: Any) -> list[str]:
     """Return list of fatal errors if template is incompatible. Empty = OK."""
-    import core
     fatals = []
     missing_uids = [uid for uid in set(TICKET_UID.values())
                     if uid not in template.styles_by_uid]
@@ -141,13 +133,11 @@ def run_sanity_checks(template: TemplateIndex) -> list[str]:
         fatals.append(
             f"TICKET_UID references UIDs not in template SWIMSTYLE: "
             f"{sorted(missing_uids)}")
-    if core.AGE_DATE is None:
-        fatals.append("Could not read AGEDATE from BSGLOBAL.MEETVALUES")
     return fatals
 
 
 def run_validation(events_in_xlsx: dict[tuple, EventKey],
-                   template: TemplateIndex) -> list[str]:
+                   template: Any) -> list[str]:
     """Validate xlsx events against template structure. Returns fatal errors."""
     fatal: list[str] = []
     for ek, ev in events_in_xlsx.items():
@@ -195,7 +185,7 @@ def run_validation(events_in_xlsx: dict[tuple, EventKey],
     return fatal
 
 
-def run_cross_row_checks(data: AggregatedData, template: TemplateIndex,
+def run_cross_row_checks(data: AggregatedData, template: Any,
                          issues: IssueCollector) -> None:
     """Emit warnings for data-quality issues across rows."""
     athletes = data.athletes
