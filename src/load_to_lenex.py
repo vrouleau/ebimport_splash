@@ -45,7 +45,10 @@ CLUB_CODES: dict[str, str] = {
     "Blue Natation":                        "BLUE",
     "Aurora Lifesaving Club":               "ALC",
     "Rouville Surf Club":                   "ROUVILLE",
+    "Saugeen Shores Lifesaving Club":       "SSLC",
     "Surf Central":                         "SC",
+    "Hawkesbury Silver Dolphins":           "HSD",
+    "Vaughan Lifesaving Club":              "VLC",
 }
 
 
