@@ -426,8 +426,6 @@ def main():
                             "athleteid": str(aid),
                         })
 
-    if db: db.close()
-
     # --- Write output ---
     xml_str = minidom.parseString(
         ET.tostring(root, encoding="unicode")
