@@ -13,6 +13,7 @@ import io
 import os
 import re
 import subprocess
+import sys
 import time
 import zipfile
 from pathlib import Path
@@ -66,7 +67,7 @@ def test_xlsx():
     """Ensure test xlsx exists (regenerate if missing)."""
     if not TEST_XLSX.exists():
         subprocess.run(
-            ["python", "tests/generate_test_xlsx.py"],
+            [sys.executable, "tests/generate_test_xlsx.py"],
             cwd=REPO_ROOT, check=True,
         )
     return TEST_XLSX
@@ -76,7 +77,7 @@ def test_xlsx():
 def meet_lxf():
     """Build the augmented meet_template.lxf from the committed base file."""
     subprocess.run(
-        ["python", "tests/build_meet_fixture.py"],
+        [sys.executable, "tests/build_meet_fixture.py"],
         cwd=REPO_ROOT, check=True,
     )
     return MEET_LXF

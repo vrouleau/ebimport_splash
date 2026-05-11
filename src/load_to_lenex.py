@@ -171,7 +171,6 @@ def main():
         print(f"  {sum(len(s) for s in relay_squads.values())} relay squads")
         print(f"\n  (No meet .lxf — skipped event matching)")
         issues.report("Issues found while validating", full=True)
-        if db: db.close()
         sys.exit(0)
 
     # Dedup individual entries (keep best time)
