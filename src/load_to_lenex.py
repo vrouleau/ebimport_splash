@@ -29,6 +29,29 @@ from meet_parser import parse_meet_lxf, ParsedMeet
 from collections import defaultdict
 import re
 
+CLUB_CODES: dict[str, str] = {
+    "Rouge Valley Lifesaving Club (RVLC)": "RVLC",
+    "Nova Scotia Lifeguard Service":        "NSLS",
+    "Narval sauvetage sportif":             "NARVAL",
+    "Maple Tulips Lifesaving Club":         "MTLC",
+    "Lifesaving Club of Markham":           "LCM",
+    "Georgina Rapids Aquatic Club":         "GRAC",
+    "Essex Swim & Lifesaving Club":         "ESSEX",
+    "Damoclès":                             "DAMOCLES",
+    "Club de sauvetage sportif de Gatineau":"CSSG",
+    "Club de sauvetage Mont-Tremblant":     "CSMT",
+    "Cochrane Water Ninjas":                "CWN",
+    "Calgary Winter Club Tsunamis":         "CWCT",
+    "Blue Natation":                        "BLUE",
+    "Aurora Lifesaving Club":               "ALC",
+    "Rouville Surf Club":                   "ROUVILLE",
+    "Surf Central":                         "SC",
+}
+
+
+def _club_code(name: str) -> str:
+    return CLUB_CODES.get(name, name[:10].upper())
+
 
 class MeetLxfTemplate:
     """Adapter: wraps ParsedMeet to provide the same interface as TemplateIndex/TemplateJSON."""
@@ -258,7 +281,7 @@ def main():
 
     for cnorm, cname in sorted(clubs.items(), key=lambda kv: kv[1].lower()):
         club_xml = ET.SubElement(clubs_xml, "CLUB", {
-            "name": cname, "code": cname[:10], "nation": MEET_NATION,
+            "name": cname, "code": _club_code(cname), "nation": MEET_NATION,
         })
 
         # Athletes in this club (only canonical keys — no duplicates)
