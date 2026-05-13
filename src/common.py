@@ -62,18 +62,20 @@ def aggregate(inscriptions: list[Inscription],
         else:
             name_to_key[nk] = akey
 
-    # Warn about duplicate keys
-    _name_counts = Counter()
+    # Warn about duplicate keys — only when two distinct non-empty licenses clash.
+    # Empty license on relay rows (NRAN absent) merging with a real license is normal.
+    _name_licenses: dict[str, list[tuple]] = defaultdict(list)
     for akey in athletes:
-        _name_counts[akey[0]] += 1
-    for nk, cnt in _name_counts.items():
-        if cnt > 1:
-            for akey, ins in athletes.items():
-                if akey[0] == nk:
-                    issues.warn("duplicate_athlete_key",
-                        f"{ins.first} {ins.last}: {cnt} entries with "
-                        f"different license values — merged to one")
-                    break
+        _name_licenses[akey[0]].append(akey)
+    for nk, akeys in _name_licenses.items():
+        if len(akeys) <= 1:
+            continue
+        real_licenses = {k[1] for k in akeys if k[1]}
+        if len(real_licenses) > 1:
+            ins = athletes[akeys[0]]
+            issues.warn("duplicate_athlete_key",
+                f"{ins.first} {ins.last}: conflicting license values "
+                f"{sorted(real_licenses)} — merged to one")
 
     # Second pass
     for ins in inscriptions:
