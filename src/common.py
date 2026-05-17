@@ -311,7 +311,7 @@ def run_cross_row_checks(data: AggregatedData, template: Any,
                         f"Masters athlete(s) in Open relay: {names}")
 
             # 4) Duo relay: cannot mix age groups
-            if relay_size == 2:
+            if relay_size == 2 and len(members) == 2:
                 codes = []
                 for ak, _ in members:
                     # Use the age_code from the athlete's individual entries
