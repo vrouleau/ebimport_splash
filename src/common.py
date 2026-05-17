@@ -291,12 +291,11 @@ def run_cross_row_checks(data: AggregatedData, template: Any,
             # 3) Masters/Open mixing
             if ev.age_code == "MASTERS":
                 non_ma = [athletes[ak] for ak, _ in members
-                          if age_at(athletes[ak].birthdate) is not None
-                          and age_at(athletes[ak].birthdate) < 25]
+                          if not any(events_in_xlsx[ek2].age_code == "MASTERS"
+                                     for a2, ek2, _ in data.ind_entries
+                                     if a2 == ak and not events_in_xlsx[ek2].is_relay)]
                 if non_ma:
-                    names = ", ".join(
-                        f"{a.first} {a.last} ({age_at(a.birthdate)})"
-                        for a in non_ma)
+                    names = ", ".join(f"{a.first} {a.last}" for a in non_ma)
                     issues.warn("relay_masters_mixing",
                         f"{relay_label} ({clubs[cnorm]}): "
                         f"non-Masters in Masters relay: {names}")
@@ -315,15 +314,18 @@ def run_cross_row_checks(data: AggregatedData, template: Any,
             if relay_size == 2:
                 codes = []
                 for ak, _ in members:
-                    m_age = age_at(athletes[ak].birthdate)
-                    if m_age is None:
-                        codes.append(None)
-                    elif m_age <= 18:
-                        codes.append("1518")
-                    elif m_age < 25:
-                        codes.append("OPEN")
-                    else:
+                    # Use the age_code from the athlete's individual entries
+                    ind_codes = {events_in_xlsx[ek2].age_code
+                                 for a2, ek2, _ in data.ind_entries
+                                 if a2 == ak and not events_in_xlsx[ek2].is_relay}
+                    if "MASTERS" in ind_codes:
                         codes.append("MASTERS")
+                    elif "OPEN" in ind_codes:
+                        codes.append("OPEN")
+                    elif "1518" in ind_codes:
+                        codes.append("1518")
+                    else:
+                        codes.append(None)
                 if all(c is not None for c in codes) and codes[0] != codes[1]:
                     m0, m1 = athletes[members[0][0]], athletes[members[1][0]]
                     issues.warn("relay_duo_mixing",
