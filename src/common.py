@@ -246,6 +246,92 @@ def run_cross_row_checks(data: AggregatedData, template: Any,
                             f"{member.first} {member.last} age {m_age} "
                             f"too young for Open relay ({clubs[cnorm]})")
 
+            # --- Relay rule warnings (non-blocking) ---
+            members = squad[:relay_size]
+            relay_label = "/".join(athletes[ak].last for ak, _ in members)
+
+            # 1) Lower-age limit (meet setting: max 2 below agegroup min)
+            _RELAY_LOWER_AGE_ALLOWED = 2
+            if ev.age_code == "1518":
+                _age_floor = 15
+            elif ev.age_code in ("OPEN", "MASTERS"):
+                _age_floor = 19
+            else:
+                _age_floor = None
+            if _age_floor is not None:
+                below = [athletes[ak] for ak, _ in members
+                         if age_at(athletes[ak].birthdate) is not None
+                         and age_at(athletes[ak].birthdate) < _age_floor]
+                if len(below) > _RELAY_LOWER_AGE_ALLOWED:
+                    names = ", ".join(f"{a.first} {a.last}" for a in below)
+                    issues.warn("relay_lower_age",
+                        f"{relay_label} ({clubs[cnorm]}): "
+                        f"{len(below)} below age {_age_floor} "
+                        f"(max {_RELAY_LOWER_AGE_ALLOWED}): {names}")
+
+            # 2) Quad mixed relay gender balance: must be 2M + 2F
+            if relay_size == 4 and style.name and "mixte" in style.name.lower():
+                genders = []
+                for ak, _ in members:
+                    # Derive gender from athlete's gendered individual entry
+                    for a2, ek2, _ in data.ind_entries:
+                        if a2 == ak:
+                            g = events_in_xlsx[ek2].gender
+                            if g in (GENDER_MALE, GENDER_FEMALE):
+                                genders.append(g)
+                                break
+                if len(genders) == 4:
+                    m_cnt = genders.count(GENDER_MALE)
+                    f_cnt = genders.count(GENDER_FEMALE)
+                    if m_cnt != 2 or f_cnt != 2:
+                        issues.warn("relay_gender_balance",
+                            f"{relay_label} ({clubs[cnorm]}): "
+                            f"{m_cnt}M+{f_cnt}F (must be 2M+2F)")
+
+            # 3) Masters/Open mixing
+            if ev.age_code == "MASTERS":
+                non_ma = [athletes[ak] for ak, _ in members
+                          if age_at(athletes[ak].birthdate) is not None
+                          and age_at(athletes[ak].birthdate) < 25]
+                if non_ma:
+                    names = ", ".join(
+                        f"{a.first} {a.last} ({age_at(a.birthdate)})"
+                        for a in non_ma)
+                    issues.warn("relay_masters_mixing",
+                        f"{relay_label} ({clubs[cnorm]}): "
+                        f"non-Masters in Masters relay: {names}")
+            elif ev.age_code == "OPEN":
+                ma_in_open = [athletes[ak] for ak, _ in members
+                              if any(events_in_xlsx[ek2].age_code == "MASTERS"
+                                     for a2, ek2, _ in data.ind_entries
+                                     if a2 == ak)]
+                if ma_in_open:
+                    names = ", ".join(f"{a.first} {a.last}" for a in ma_in_open)
+                    issues.warn("relay_masters_mixing",
+                        f"{relay_label} ({clubs[cnorm]}): "
+                        f"Masters athlete(s) in Open relay: {names}")
+
+            # 4) Duo relay: cannot mix age groups
+            if relay_size == 2:
+                codes = []
+                for ak, _ in members:
+                    m_age = age_at(athletes[ak].birthdate)
+                    if m_age is None:
+                        codes.append(None)
+                    elif m_age <= 18:
+                        codes.append("1518")
+                    elif m_age < 25:
+                        codes.append("OPEN")
+                    else:
+                        codes.append("MASTERS")
+                if all(c is not None for c in codes) and codes[0] != codes[1]:
+                    m0, m1 = athletes[members[0][0]], athletes[members[1][0]]
+                    issues.warn("relay_duo_mixing",
+                        f"{relay_label} ({clubs[cnorm]}): "
+                        f"mixed age groups — "
+                        f"{m0.first} {m0.last} ({codes[0]}) + "
+                        f"{m1.first} {m1.last} ({codes[1]})")
+
 
 # --------------------------------------------------------------------------- #
 # Internal helpers

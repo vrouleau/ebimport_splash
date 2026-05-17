@@ -80,6 +80,47 @@ curl -sS -X POST http://localhost:5000/api/audit \
   -F pdf=@results.pdf -F xlsx=@input.xlsx
 ```
 
+## Validation Rules
+
+The tool emits warnings (`[WARNING]`) and notes (`[NOTE]`) in the issues report. These are non-blocking — the Lenex file is still generated.
+
+### Individual Entries
+
+| Category | Severity | Description |
+|----------|----------|-------------|
+| `no_dob` | WARNING | Athlete has no birthdate |
+| `age_bracket_mismatch` | WARNING | Athlete age outside their registered bracket (15-18, Open 19+, Masters 25+) |
+| `duplicate_athlete_key` | WARNING | Same athlete key appears more than once |
+| `duplicate_entry` | WARNING | Duplicate entry for same athlete+event |
+
+### Relay Rules
+
+| Category | Severity | Description |
+|----------|----------|-------------|
+| `incomplete_relay` | WARNING | Relay team has fewer members than required (e.g., 3/4) |
+| `relay_member_age` | WARNING | Member age outside the relay's age bracket |
+| `relay_lower_age` | WARNING | More than 2 members below the agegroup minimum (meet setting: `RELAYTOYOUNGALLOWED=2`) |
+| `relay_gender_balance` | WARNING | Quad mixed relay ("Mixte") does not have exactly 2M + 2F |
+| `relay_masters_mixing` | WARNING | Masters athlete in an Open relay, or non-Masters (age < 25) in a Masters relay |
+| `relay_duo_mixing` | WARNING | Duo relay members from different age categories (15-18, Open, Masters must not mix) |
+
+### Parsing
+
+| Category | Severity | Description |
+|----------|----------|-------------|
+| `missing_name` | WARNING | Row has no first/last name |
+| `missing_ticket` | WARNING | Row has no ticket type |
+| `unknown_ticket` | WARNING | Ticket type not recognised by the parser |
+| `bad_birthdate` | WARNING | Birthdate could not be parsed |
+| `bad_time` | WARNING | Entry time could not be parsed |
+| `truncated_name` | WARNING | Name was truncated to fit Lenex limits |
+
+### Auto-Fixes (informational)
+
+| Category | Severity | Description |
+|----------|----------|-------------|
+| `teammate_auto_fix` | NOTE | Teammate name was fuzzy-matched or corrected automatically |
+
 ## Key Files
 
 | File | Purpose |
