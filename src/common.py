@@ -310,7 +310,7 @@ def run_cross_row_checks(data: AggregatedData, template: Any,
                         f"{relay_label} ({clubs[cnorm]}): "
                         f"{m_cnt}M+{f_cnt}F (must be 2M+2F)")
                 elif unknown > 0 and (m_cnt + unknown < 2 or f_cnt + unknown < 2):
-                    issues.warn("relay_gender_balance",
+                    issues.note("relay_gender_balance",
                         f"{relay_label} ({clubs[cnorm]}): "
                         f"{m_cnt}M+{f_cnt}F+{unknown}? (must be 2M+2F)")
 
