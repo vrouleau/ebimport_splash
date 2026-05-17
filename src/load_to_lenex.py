@@ -110,6 +110,10 @@ class MeetLxfTemplate:
             for a in e.agegroups:
                 if a.amin is not None and 25 <= a.amin < 100:
                     return e
+            # Also match relay prelim events with Open bracket [19,-1]
+            for a in e.agegroups:
+                if a.amin == 19 and (a.amax is None or a.amax < 0 or a.amax >= 99):
+                    return e
         return None
 
 # Lenex constants
@@ -384,7 +388,13 @@ def main():
                     ag = pick_agegroup_for_relay(
                         tevent, ev.age_code, age_sum, oldest_age=youngest)
                     if ag is None:
-                        continue
+                        # Masters relays on prelim: use Open bracket directly
+                        if ev.age_code == "MASTERS" and not tevent.masters:
+                            for a in tevent.agegroups:
+                                if a.amin == 19 and (a.amax is None or a.amax < 0 or a.amax >= 99):
+                                    ag = a; break
+                        if ag is None:
+                            continue
 
                     # For Lenex relay import, SPLASH matches the relay's
                     # agemin/agemax to an AGEGROUP on the event.  For
