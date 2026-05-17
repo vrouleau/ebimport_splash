@@ -285,6 +285,14 @@ def main():
         ev = events_in_xlsx[ekey]
         if not ev.is_relay and akey not in athlete_gender:
             athlete_gender[akey] = ev.gender
+    # Fallback: derive from gendered relay squads
+    for (_, ekey), squads in relay_squads.items():
+        rg = events_in_xlsx[ekey].gender
+        if rg in (GENDER_MALE, GENDER_FEMALE):
+            for sq in squads:
+                for ak, _ in sq:
+                    if ak not in athlete_gender:
+                        athlete_gender[ak] = rg
 
     for cnorm, cname in sorted(clubs.items(), key=lambda kv: kv[1].lower()):
         club_xml = ET.SubElement(clubs_xml, "CLUB", {

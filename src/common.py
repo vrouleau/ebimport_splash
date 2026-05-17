@@ -273,20 +273,46 @@ def run_cross_row_checks(data: AggregatedData, template: Any,
             if relay_size == 4 and style.name and "mixte" in style.name.lower():
                 genders = []
                 for ak, _ in members:
-                    # Derive gender from athlete's gendered individual entry
+                    g = None
+                    # Check individual entries
                     for a2, ek2, _ in data.ind_entries:
                         if a2 == ak:
-                            g = events_in_xlsx[ek2].gender
-                            if g in (GENDER_MALE, GENDER_FEMALE):
-                                genders.append(g)
+                            eg = events_in_xlsx[ek2].gender
+                            if eg in (GENDER_MALE, GENDER_FEMALE):
+                                g = eg
                                 break
-                if len(genders) == 4:
-                    m_cnt = genders.count(GENDER_MALE)
-                    f_cnt = genders.count(GENDER_FEMALE)
-                    if m_cnt != 2 or f_cnt != 2:
-                        issues.warn("relay_gender_balance",
-                            f"{relay_label} ({clubs[cnorm]}): "
-                            f"{m_cnt}M+{f_cnt}F (must be 2M+2F)")
+                    # Fallback: check gendered relay squads
+                    if g is None:
+                        for (_, rk), rsquads in relay_squads.items():
+                            rg = events_in_xlsx[rk].gender
+                            if rg in (GENDER_MALE, GENDER_FEMALE):
+                                if any(a2 == ak for sq in rsquads
+                                       for a2, _ in sq):
+                                    g = rg
+                                    break
+                    # Fallback: athlete's own event
+                    if g is None:
+                        eg = athletes[ak].event.gender
+                        if eg in (GENDER_MALE, GENDER_FEMALE):
+                            g = eg
+                    genders.append(g)
+                known = [g for g in genders if g is not None]
+                m_cnt = known.count(GENDER_MALE)
+                f_cnt = known.count(GENDER_FEMALE)
+                unknown = genders.count(None)
+                # Flag if provably wrong even assuming best case for unknowns
+                if m_cnt > 2 or f_cnt > 2:
+                    issues.warn("relay_gender_balance",
+                        f"{relay_label} ({clubs[cnorm]}): "
+                        f"{m_cnt}M+{f_cnt}F detected (must be 2M+2F)")
+                elif unknown == 0 and (m_cnt != 2 or f_cnt != 2):
+                    issues.warn("relay_gender_balance",
+                        f"{relay_label} ({clubs[cnorm]}): "
+                        f"{m_cnt}M+{f_cnt}F (must be 2M+2F)")
+                elif unknown > 0 and (m_cnt + unknown < 2 or f_cnt + unknown < 2):
+                    issues.warn("relay_gender_balance",
+                        f"{relay_label} ({clubs[cnorm]}): "
+                        f"{m_cnt}M+{f_cnt}F+{unknown}? (must be 2M+2F)")
 
             # 3) Masters/Open mixing
             if ev.age_code == "MASTERS":
