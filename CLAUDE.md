@@ -24,7 +24,7 @@ ebimport_splash/
 │   └── app.py              # Flask web app wrapping load_to_lenex
 ├── scripts/
 │   ├── simulate_results.bat / .vbs   # Windows scripts to seed fake results in SPLASH
-│   ├── masters_transfer.bat / .vbs   # Transfer Masters athletes between databases
+│   ├── masters_transfer.bat / .vbs   # Transfer Masters individuals + relays to final events
 │   └── audit.bat / format_audit.py  # Audit report generation
 ├── forms/
 │   └── jotform_inscription.json     # JotForm form definition (for reference)
@@ -87,10 +87,42 @@ Stateless Flask app:
 
 ## Masters athletes
 
-- Individual Masters: routed to 5-year age brackets in SPLASH
-- Masters relay: routed by sum of team members' ages
-- Identified in Lenex output with `HANDICAP exception=X` attribute
+- Individual Masters: routed to **prelim events** (swim with Open), marked with `HANDICAP exception=X`
+- After prelims, `scripts/masters_transfer.vbs` transfers results to dedicated Masters final events
+- Masters relay: also routed to prelim events with Open bracket [19,99]; VBS transfers to finals
+- VBS relay transfer routes to age-sum brackets (4-person) or youngest-age brackets (duos)
 - `AGE_DATE` defaults to 2026-12-31; override by setting `core.AGE_DATE` before calling
+
+### `scripts/masters_transfer.vbs`
+Windows VBScript run against the SPLASH MDB after prelim heats:
+1. Marks Masters athletes (`HANDICAPEX='X'`) and relay teams (all members Masters)
+2. Transfers individual results from prelim to Masters final events (matched by SWIMSTYLEID+GENDER)
+3. Transfers relay results: creates heats, copies RELAY+RELAYPOSITION rows, deletes originals
+4. Reports per-event transfer counts with event names
+
+## Validation rules
+
+Non-blocking warnings emitted in the issues report:
+
+| Category | Description |
+|----------|-------------|
+| `no_dob` | Athlete has no birthdate |
+| `age_bracket_mismatch` | Athlete age outside registered bracket |
+| `duplicate_athlete_key` | Same athlete key appears more than once |
+| `duplicate_entry` | Duplicate entry for same athlete+event |
+| `incomplete_relay` | Relay team has fewer members than required |
+| `relay_member_age` | Member age outside the relay's age bracket |
+| `relay_lower_age` | More than 2 members below agegroup min (meet: `RELAYTOYOUNGALLOWED=2`) |
+| `relay_gender_balance` | Quad mixed relay not exactly 2M+2F |
+| `relay_masters_mixing` | Masters in Open relay or non-Masters in Masters relay |
+| `relay_duo_mixing` | Duo relay members from different age categories |
+| `missing_name` | Row has no first/last name |
+| `missing_ticket` | Row has no ticket type |
+| `unknown_ticket` | Ticket type not recognised |
+| `bad_birthdate` | Birthdate could not be parsed |
+| `bad_time` | Entry time could not be parsed |
+| `truncated_name` | Name truncated to fit Lenex limits |
+| `teammate_auto_fix` | (NOTE) Teammate name fuzzy-matched or corrected |
 
 ## Exported zip naming
 
