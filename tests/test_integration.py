@@ -237,6 +237,30 @@ class TestLenexPath:
         handicap = re.findall(r'<HANDICAP exception="X"', lef)
         assert len(handicap) < len(all_ath)
 
+    def test_no_handicap_on_under25(self, lenex_result):
+        """Athletes under 25 must never have HANDICAP exception='X'.
+        Regression for scoping bug where is_masters leaked across athletes."""
+        _, z = lenex_result
+        lxf_bytes = z.read("inscriptions.lxf")
+        lxf = zipfile.ZipFile(io.BytesIO(lxf_bytes))
+        lef = lxf.read("meet.lef").decode()
+
+        athlete_blocks = re.findall(
+            r'<ATHLETE [^>]*birthdate="([^"]+)"[^>]*>(.*?)</ATHLETE>',
+            lef, re.DOTALL,
+        )
+        under25_with_handicap = []
+        for bd, block in athlete_blocks:
+            try:
+                age = 2026 - int(bd[:4])
+            except ValueError:
+                continue
+            if age < 25 and 'exception="X"' in block:
+                under25_with_handicap.append((bd, age))
+        assert not under25_with_handicap, (
+            f"Under-25 athletes with HANDICAP: {under25_with_handicap}"
+        )
+
     def test_relay_entrytime_matches_team_time(self, lenex_result):
         """Relay ENTRY entrytime should be the relay row's team time,
         not the sum of teammates' individual best times. Regression for

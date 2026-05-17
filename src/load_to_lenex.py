@@ -311,10 +311,10 @@ def main():
             if ins.birthdate:
                 attrs["birthdate"] = ins.birthdate.strftime("%Y-%m-%d")
             if ins.license:
-                # Check if athlete has any Masters entries
-                is_masters = any(events_in_xlsx[ek].age_code == "MASTERS"
-                                 for (ak, ek), _ in best_by.items() if ak == akey)
                 attrs["license"] = ins.license or ""
+            # Check if athlete has any Masters entries
+            is_masters = any(events_in_xlsx[ek].age_code == "MASTERS"
+                             for (ak, ek), _ in best_by.items() if ak == akey)
             ath_xml = ET.SubElement(aths_xml, "ATHLETE", attrs)
             if is_masters:
                 ET.SubElement(ath_xml, "HANDICAP", {"exception": "X"})
